@@ -4469,3 +4469,854 @@ bool Item_func_json_overlaps::fix_length_and_dec(THD *thd)
 
   return Item_bool_func::fix_length_and_dec(thd);
 }
+
+void initialize_curr_constraint(st_json_schema *curr_step)
+{
+  curr_step->common_constraints.type= JSON_VALUE_UNINITIALIZED;
+  curr_step->common_constraints.const_value.has_const= 0;
+  curr_step->common_constraints.enum_values.flag= 0;
+  curr_step->common_constraints.enum_values.is_enum_inited= 0;
+
+  curr_step->number_constraints.flag= 0;
+
+  curr_step->string_constraints.flag= 0;
+
+  curr_step->array_constraints.flag= 0;
+  curr_step->array_constraints.allowed_item_type= JSON_VALUE_UNINITIALIZED;
+
+  curr_step->object_constraints.has_required= 0;
+  curr_step->object_constraints.is_properties_inited= 0;
+  curr_step->object_constraints.level_property= 0;
+}
+
+int assign_type(st_common_constraints *curr_common_constraint,
+                 st_array_constraints *curr_arr_constraint,
+                 json_engine_t *je)
+{
+   json_value_types *curr_type = curr_common_constraint ?
+                        &(curr_common_constraint->type) :
+                        &(curr_arr_constraint->allowed_item_type);
+
+  if (!strncmp((const char*)je->value, "number", je->value_len))
+      *curr_type= JSON_VALUE_NUMBER;
+  else if(!strncmp((const char*)je->value, "string", je->value_len))
+      *curr_type= JSON_VALUE_STRING;
+  else if(!strncmp((const char*)je->value, "array", je->value_len))
+      *curr_type= JSON_VALUE_ARRAY;
+  else if(!strncmp((const char*)je->value, "object", je->value_len))
+      *curr_type= JSON_VALUE_OBJECT;
+  else if (!strncmp((const char*)je->value, "true", je->value_len))
+      *curr_type= JSON_VALUE_TRUE;
+  else if (!strncmp((const char*)je->value, "false", je->value_len))
+      *curr_type= JSON_VALUE_FALSE;
+  else if (!strncmp((const char*)je->value, "null", je->value_len))
+      *curr_type= JSON_VALUE_NULL;
+  else
+      return true;
+  return false;
+}
+
+uchar* get_value(const char *buff, size_t *length,
+                     my_bool /* unused */)
+{
+  st_scalar_enum *val= (st_scalar_enum*)buff;
+
+  *length= strlen(val->str);
+  return (uchar*) val;
+}
+
+/*
+  Return true if keyword is not handled
+*/
+int handle_common_constraint_keywords(THD *thd, const char *curr_key,
+                                      st_common_constraints
+                                            *curr_common_constraint,
+                                      json_engine_t *je, int key_len)
+{
+  if (!strncmp((const char*)curr_key, "type", key_len))
+  {
+    if (curr_common_constraint->type > JSON_VALUE_UNINITIALIZED ||
+        assign_type(curr_common_constraint, NULL, je))
+      return true;
+  }
+  else if(!strncmp((const char*)curr_key, "const", key_len))
+  {
+    json_engine_t *curr_const_json_value=
+                  &curr_common_constraint->const_value.const_json_value;
+
+    curr_common_constraint->const_value.has_const= 1;
+    curr_common_constraint->const_value.const_type= je->value_type;
+    curr_const_json_value->s.c_str= je->value;
+    curr_const_json_value->s.str_end= je->value+je->value_len;
+    curr_const_json_value->s.cs= je->s.cs;
+    curr_const_json_value->s.wc= je->s.wc;
+
+    return false;
+  }
+  else if (!strncmp((const char*)curr_key, "enum", key_len))
+  {
+    int curr_level= je->stack_p;
+    if (!curr_common_constraint->enum_values.is_enum_inited)
+    {
+      if (my_hash_init(PSI_INSTRUMENT_ME,
+                 &curr_common_constraint->enum_values.enum_hash,
+                 je->s.cs, 1024, 0, 0, (my_hash_get_key) get_value,
+                  0, 0))
+        return true;
+      curr_common_constraint->enum_values.is_enum_inited= 1;
+    }
+
+    while(json_scan_next(je) == 0 && curr_level <= je->stack_p)
+    {
+      if (json_read_value(je))
+        return true;
+      if (je->value_type == JSON_VALUE_NULL)
+        curr_common_constraint->enum_values.flag|= HAS_NULL;
+      else if (je->value_type == JSON_VALUE_TRUE)
+        curr_common_constraint->enum_values.flag|= HAS_TRUE;
+      else if (je->value_type == JSON_VALUE_FALSE)
+        curr_common_constraint->enum_values.flag|= HAS_FALSE;
+      else
+      {
+        st_scalar_enum *val= (st_scalar_enum *)
+                            alloc_root(thd->mem_root, sizeof(st_scalar_enum));
+        val->enum_type= je->value_type;
+        if (json_value_scalar(je))
+        {
+          val->str= (char*)alloc_root(current_thd->mem_root, je->value_len);
+          val->str[je->value_len]= '\0';
+          strncpy(val->str, (const char*)je->value, je->value_len);
+           if (my_hash_insert(
+                   &curr_common_constraint->enum_values.enum_hash,
+                   (const uchar*)(val)))
+             return true;
+        }
+        else
+        {
+          DYNAMIC_STRING a_res;
+          if (init_dynamic_string(&a_res, NULL, 0, 0))
+            goto free;
+          if (json_normalize(&a_res, (const char*)je->value, je->value_len,
+                            je->s.cs))
+            goto free;
+          val->str= (char *)alloc_root(thd->mem_root, sizeof(a_res.length));
+          strncpy((char*)val->str, (const char*)a_res.str, a_res.length);
+          if (my_hash_insert(
+                   &curr_common_constraint->enum_values.enum_hash,
+                   (const uchar*)(val)))
+           return true;
+          free:
+           dynstr_free(&a_res);
+        }
+      }
+    }
+  }
+  else
+   return true;
+
+  return false;
+}
+
+/*
+  Return true if keyword not handled
+*/
+int handle_number_constraint_keyword(const char *curr_key,
+                                     st_number_constraints
+                                                      *curr_number_constraint,
+                                   double val, int key_len,
+                                   st_common_constraints
+                                                      *curr_common_constraint)
+{
+  int res= 0;
+
+  if (!strncmp((const char*)curr_key, "maximum", key_len))
+  {
+    curr_number_constraint->max= val;
+    curr_number_constraint->flag|= HAS_MAX;
+  }
+  else if (!strncmp((const char*)curr_key, "minimum", key_len))
+  {
+    curr_number_constraint->min= val;
+    curr_number_constraint->flag|= HAS_MIN;
+  }
+  else if (!strncmp((const char*)curr_key, "multipleOf", key_len) && val > 0)
+  {
+    /*
+     value of "multipleOf" should be >= 0 according to rules for json schema
+    */
+    curr_number_constraint->multiple_of= val;
+    curr_number_constraint->flag|= HAS_MULTIPLE_OF;
+  }
+  else if (!strncmp((const char*)curr_key, "exclusiveMaximum", key_len))
+  {
+    curr_number_constraint->ex_max= val;
+    curr_number_constraint->flag|= HAS_EXCLUSIVE_MAX;
+  }
+  else if (!strncmp((const char*)curr_key, "exclusiveMinimum", key_len))
+  {
+    curr_number_constraint->ex_min= val;
+    curr_number_constraint->flag|= HAS_EXCLUSIVE_MIN;
+  }
+  else
+    res= 1;
+  return res;
+}
+
+/*
+  Return true if keyword not handled
+*/
+int handle_string_constraint_keyword(const char *curr_key,
+                                     st_string_constraints
+                                                      *curr_string_constraint,
+                                     double val, int key_len,
+                                     st_common_constraints
+                                                      *curr_common_constraint)
+{
+  int res= 0;
+
+  if (!strncmp((const char*)curr_key, "maxLength", key_len))
+  {
+    curr_string_constraint->max_len= val;
+    curr_string_constraint->flag|= HAS_MAX_LEN;
+  }
+  else if (!strncmp((const char*)curr_key, "minLength", key_len))
+  {
+    curr_string_constraint->min_len= val;
+    curr_string_constraint->flag|= HAS_MIN_LEN;
+  }
+  else
+    res= true;
+
+  return res;
+}
+
+/*
+  Return true if keyword not handled
+*/
+int handle_array_constraint_keyword(const char *curr_key,
+                                    st_array_constraints
+                                                       *curr_array_constraint,
+                                    double val, int key_len,
+                                    st_common_constraints
+                                                      *curr_common_constraint,
+                                    json_engine_t *je)
+{
+  int res= 0;
+
+  if (!strncmp((const char*)curr_key, "maxItems", key_len))
+  {
+    curr_array_constraint->max_items= val;
+    curr_array_constraint->flag|= HAS_MAX_ITEMS;
+  }
+  else if (!strncmp((const char*)curr_key, "minItems", key_len))
+  {
+    curr_array_constraint->min_items= val;
+    curr_array_constraint->flag|= HAS_MIN_ITEMS;
+  }
+  else if(!strncmp((const char*)curr_key, "items", key_len))
+  {
+    if (curr_common_constraint->type == JSON_VALUE_ARRAY ||
+       curr_common_constraint->type == JSON_VALUE_UNINITIALIZED)
+    {
+      if (json_scan_next(je) || json_read_value(je) ||
+          assign_type(NULL, curr_array_constraint, je))
+        return true;
+    }
+  }
+  else
+    res= true;
+
+  return res;
+}
+
+int fill_curr_property(THD *thd, st_json_schema *curr_constraint,
+                       json_engine_t *je, int *count,
+                       st_json_schema *curr_step)
+{
+  int curr_level= je->stack_p;
+  initialize_curr_constraint(curr_constraint);
+
+  while (json_scan_next(je) == 0 && je->stack_p >= curr_level)
+  {
+    switch (je->state)
+    {
+      case JST_KEY:
+      {
+        const uchar *key_end, *key_start= je->s.c_str;
+        do
+        {
+          key_end= je->s.c_str;
+        } while (json_read_keyname_chr(je) == 0);
+
+        if (json_read_value(je))
+          return true;
+        if (!strncmp((const char*)key_start, "properties",10))
+        {
+          (*count)++;
+          initialize_curr_constraint(&curr_step[*count]);
+          (&curr_step[*count])->object_constraints.level_property= je->stack_p;
+          return false;
+        }
+        else
+        {
+          if ((handle_keyword(thd, (const char*)key_start,
+                              curr_constraint, je,
+                              key_end - key_start, count)))
+            return true;
+        }
+        break;
+      }
+    }
+   }
+   return false;
+}
+
+uchar* get_key_for_property(const uchar *buff, size_t *length,
+                        my_bool /* unused */)
+{
+  st_object_property *curr_obj_property = (st_object_property*) buff;
+
+  *length= curr_obj_property->keyname.length;
+  return (uchar*) curr_obj_property->keyname.str;
+}
+
+int handle_object_constraint_keyword(THD *thd, const char *curr_key,
+                                   st_json_schema *curr_step,
+                                   double val, int key_len,
+                                   st_common_constraints
+                                         *curr_common_constraint,
+                                   json_engine_t *je, int *count)
+{
+  int res= false;
+  if (!strncmp((const char*)curr_key, "properties", key_len))
+  {
+    if (je->stack_p > 2)
+    {
+      curr_step++;
+      (*count)++;
+      initialize_curr_constraint(curr_step);
+      curr_step->object_constraints.level_property= je->stack_p;
+    }
+  }
+  else if (!strncmp((const char*)curr_key, "required", key_len))
+  {
+    curr_step++;
+    curr_step->object_constraints.has_required= 1;
+    curr_step->object_constraints.required_properties.s.c_str= je->value;
+    if (json_skip_level(je))
+      return 1;
+    curr_step->object_constraints.required_properties.s.str_end= je->s.c_str;
+    curr_step->object_constraints.required_properties.s.cs= je->s.cs;
+  }
+  else
+  {
+    st_object_property *curr_obj_property=
+         (st_object_property *) alloc_root(thd->mem_root,
+                                           sizeof(st_object_property));
+    initialize_curr_constraint(&(curr_obj_property->keyname_constraints));
+    fill_curr_property(thd, &(curr_obj_property->keyname_constraints),
+                       je, count, curr_step);
+    curr_obj_property->keyname.str=
+          (const char *)alloc_root(thd->mem_root, key_len);
+    strncpy((char*)curr_obj_property->keyname.str,
+            (const char*)curr_key, key_len);
+    curr_obj_property->keyname.length= key_len;
+    if (!curr_step->object_constraints.is_properties_inited)
+    {
+      if (my_hash_init(PSI_INSTRUMENT_ME,
+                       &curr_step->object_constraints.properties,
+                      je->s.cs, 1024, 0, 0,
+                      (my_hash_get_key) get_key_for_property,
+                      0, HASH_UNIQUE))
+        return true;
+      curr_step->object_constraints.is_properties_inited= 1;
+    }
+    if (my_hash_insert(&(curr_step->object_constraints.properties),
+        (const uchar*)(curr_obj_property)))
+      return true;
+  }
+  return res;
+}
+
+/*
+ Return true if keyword not handled
+*/
+int handle_keyword(THD *thd, const char *curr_key, st_json_schema *curr_step,
+                   json_engine_t *je, int key_len, int *count)
+{
+  int res= 0, err;
+  char *end;
+  double val= je->s.cs->strntod((char *) je->value, je->value_len, &end,
+                                &err);
+
+  if (!strncmp((const char*)curr_key, "type", key_len) ||
+      !strncmp((const char*)curr_key, "const", key_len) ||
+      !strncmp((const char*)curr_key, "enum", key_len))
+  {
+    res= handle_common_constraint_keywords(thd, curr_key,
+                                           &(curr_step->common_constraints),
+                                           je, key_len);
+    return res;
+  }
+
+  res= 1;
+  if ((curr_step->common_constraints.type == JSON_VALUE_UNINITIALIZED ||
+        curr_step->common_constraints.type == JSON_VALUE_NUMBER))
+    res= handle_number_constraint_keyword(curr_key,
+                                          &(curr_step->number_constraints),
+                                          val, key_len,
+                                          &curr_step->common_constraints);
+  if (res && (curr_step->common_constraints.type == JSON_VALUE_UNINITIALIZED ||
+           curr_step->common_constraints.type == JSON_VALUE_STRING))
+    res= handle_string_constraint_keyword(curr_key,
+                                          &(curr_step->string_constraints),
+                                          val, key_len,
+                                          &curr_step->common_constraints);
+  if (res && (curr_step->common_constraints.type == JSON_VALUE_UNINITIALIZED ||
+           curr_step->common_constraints.type == JSON_VALUE_ARRAY))
+    res= handle_array_constraint_keyword(curr_key,
+                                         &(curr_step->array_constraints),
+                                         val, key_len,
+                                         &curr_step->common_constraints, je);
+  if (res && (curr_step->common_constraints.type == JSON_VALUE_UNINITIALIZED ||
+           curr_step->common_constraints.type == JSON_VALUE_OBJECT))
+    res= handle_object_constraint_keyword(thd, curr_key, curr_step,
+                                          val, key_len,
+                                          &curr_step->common_constraints,
+                                          je, count);
+  return res;
+}
+
+
+/*
+  Return true if can't validate
+*/
+int validate_scalar(json_engine_t *je, st_json_schema *curr_step)
+{
+   st_const_value *curr_const_value=
+                      &curr_step->common_constraints.const_value;
+   json_engine_t  *curr_step_json= &(curr_const_value->const_json_value);
+   int res= 1, enum_val_not_found= false;
+
+  if (curr_step->common_constraints.enum_values.is_enum_inited)
+  {
+    char *temp= (char*)malloc(je->value_len);
+    temp[je->value_len]= '\0';
+    strncpy(temp, (const char*)je->value, je->value_len);
+    st_scalar_enum *curr_val;
+    if (je->value_type == JSON_VALUE_NUMBER ||
+        je->value_type == JSON_VALUE_STRING)
+    {
+      if ((curr_val= (st_scalar_enum*)my_hash_search(
+            &curr_step->common_constraints.enum_values.enum_hash,
+            (const uchar*)temp, je->value_len)))
+      {
+        if (curr_val->enum_type != je->value_type)
+          enum_val_not_found= true;
+      }
+    }
+    else
+    {
+      uint curr_flag= curr_step->common_constraints.enum_values.flag;
+      if ((je->value_type == JSON_VALUE_NULL && (curr_flag & HAS_NULL)) ||
+           (je->value_type == JSON_VALUE_TRUE && (curr_flag & HAS_TRUE)) ||
+           (je->value_type == JSON_VALUE_TRUE && (curr_flag & HAS_TRUE)))
+        enum_val_not_found= true;
+    }
+    if (je->value_len)
+     free(temp);
+    if (!enum_val_not_found)
+      return true;
+  }
+
+  if (je->value_type == JSON_VALUE_NUMBER)
+  {
+    char *end;
+    int err;
+    uint curr_flag= curr_step->number_constraints.flag;
+
+    double val= je->s.cs->strntod((char *) je->value,
+                                  je->value_len, &end, &err);
+    double temp= val / curr_step->number_constraints.multiple_of;
+    double is_multiple_of= curr_flag & HAS_MULTIPLE_OF ?
+                (temp - (long long int)temp) == 0 : true;
+    double const_value;
+    if (curr_step->common_constraints.const_value.has_const)
+    {
+     const_value=
+             curr_step_json->s.cs->strntod((char *)curr_step_json->s.c_str,
+              curr_step_json->s.str_end-curr_step_json->s.c_str, &end, &err);
+    }
+    if ((curr_step->common_constraints.type == JSON_VALUE_NUMBER) &&
+        (curr_flag & HAS_MAX ?
+         val <= curr_step->number_constraints.max : true) &&
+        (curr_flag & HAS_EXCLUSIVE_MAX ?
+         val < curr_step->number_constraints.ex_max : true) &&
+        (curr_flag & HAS_MIN ?
+         val >= curr_step->number_constraints.min : true) &&
+        (curr_flag & HAS_EXCLUSIVE_MIN ?
+         val > curr_step->number_constraints.ex_min : true) &&
+        (curr_flag & HAS_MULTIPLE_OF ? is_multiple_of : true) &&
+        (curr_step->common_constraints.const_value.has_const ?
+         val == const_value : true))
+      res= false;
+  }
+  else if(je->value_type == JSON_VALUE_STRING)
+  {
+    bool str_const_validated= false;
+    if (curr_step->common_constraints.const_value.has_const)
+    {
+      if (je->value_len == (curr_step_json->s.str_end-curr_step_json->s.c_str)
+          && !strncmp((const char*)curr_step_json->s.c_str,
+                   (const char*)je->value, je->value_len))
+        str_const_validated= true;
+    }
+    uint curr_flag= curr_step->string_constraints.flag;
+    if ((curr_step->common_constraints.type == JSON_VALUE_STRING) &&
+        (curr_flag & HAS_MAX_LEN ?
+         je->value_len <= curr_step->string_constraints.max_len : true) &&
+        (curr_flag & HAS_MIN_LEN ?
+         je->value_len >= curr_step->string_constraints.min_len : true) &&
+        (curr_step->common_constraints.const_value.has_const ?
+                                       str_const_validated : true))
+      res= false;
+  }
+
+  return res;
+}
+
+bool validate_array(json_engine_t *je,
+                        json_engine_t *const_je,
+                         st_json_schema *curr_step)
+{
+  int number_of_elements= 0, level= je->stack_p, result= false;
+  st_array_constraints *curr_constraint_arr= &curr_step->array_constraints;
+
+  while (json_scan_next(je) == 0 && je->stack_p >= level &&
+           json_read_value(je)== 0)
+  {
+    if (curr_constraint_arr->allowed_item_type != JSON_VALUE_UNINITIALIZED &&
+        (curr_constraint_arr->allowed_item_type != je->value_type))
+      return true;
+    if (je->stack_p < level)
+      break;
+    if (!json_value_scalar(je))
+      json_skip_level(je);
+    number_of_elements++;
+  }
+  if (curr_step->common_constraints.const_value.has_const)
+  {
+    int res= 0;
+    json_engine_t *curr_const_value=
+                &(curr_step->common_constraints.const_value.const_json_value);
+    String je_value((const char*)const_je->s.c_str,
+                     const_je->s.str_end - const_je->s.c_str, const_je->s.cs);
+    String curr_step_const_value((const char*)curr_const_value->s.c_str,
+                        curr_const_value->s.str_end-curr_const_value->s.c_str,
+                        curr_const_value->s.cs);
+
+    DYNAMIC_STRING a_res, b_res;
+    if (init_dynamic_string(&a_res, NULL, 0, 0) ||
+        init_dynamic_string(&b_res, NULL, 0, 0))
+    {
+      res= 1;
+      goto free;
+    }
+
+    if (json_normalize(&a_res, je_value.ptr(), je_value.length(),
+                       je_value.charset()) ||
+        json_normalize(&b_res, curr_step_const_value.ptr(),
+                       curr_step_const_value.length(),
+                       curr_step_const_value.charset()))
+    {
+      res= 1;
+      goto free;
+    }
+    result= strcmp(a_res.str, b_res.str) ? 0 : 1;
+
+    free:
+      dynstr_free(&b_res);
+      dynstr_free(&a_res);
+      if (res)
+        return res;
+  }
+  if ((curr_constraint_arr->flag & HAS_MAX_ITEMS ?
+       number_of_elements <= curr_constraint_arr->max_items : true) &&
+       (curr_constraint_arr->flag & HAS_MAX_ITEMS ?
+        number_of_elements >= curr_constraint_arr->min_items : true) &&
+       (curr_step->common_constraints.const_value.has_const ?
+        result : true))
+    return false;
+  return true;
+}
+
+uchar* get_key_name(const char *key_name, size_t *length,
+                     my_bool /* unused */)
+{
+  *length= strlen(key_name);
+  return (uchar*) key_name;
+}
+
+bool validate_object(json_engine_t *je,
+                        json_engine_t *const_je,
+                         st_json_schema *curr_step,
+                         int *count)
+{
+  int curr_level= je->stack_p;
+  HASH temp;
+  json_engine_t required_arr;
+  my_hash_init(PSI_INSTRUMENT_ME, &temp,
+               je->s.cs, 1024, 0, 0, (my_hash_get_key) get_key_name,
+               0, 0);
+  if (curr_step->object_constraints.has_required)
+  {
+    json_scan_start(&required_arr, je->s.cs,
+    (const uchar *) curr_step->object_constraints.required_properties.s.c_str,
+    (const uchar *) curr_step->object_constraints.required_properties.s.str_end);
+  }
+  while (json_scan_next(je)== 0 && je->stack_p >= curr_level)
+  {
+    switch (je->state)
+    {
+      case JST_KEY:
+      {
+        const uchar *key_end, *key_start= je->s.c_str;
+        st_object_property *curr_obj_property;
+        do
+        {
+          key_end= je->s.c_str;
+        } while (json_read_keyname_chr(je) == 0);
+
+        if (json_read_value(je))
+          return true;
+
+        char *str= (char*)alloc_root(current_thd->mem_root, key_end-key_start);
+        str[(int)(key_end-key_start)]='\0';
+        strncpy((char*)str, (const char*)key_start, key_end-key_start);
+
+          if (my_hash_insert(&temp, (uchar*)(str)))
+            return true;
+
+        if ((curr_obj_property = (st_object_property*) my_hash_search(
+                                &curr_step->object_constraints.properties,
+                                (const uchar*) key_start,
+                                key_end-key_start)))
+        {
+          if (curr_obj_property->keyname_constraints.common_constraints.type
+              != je->value_type)
+           return true;
+          int res= 0;
+          if (curr_obj_property->keyname_constraints.common_constraints.type > 2)
+          {
+            res= validate_scalar(je,
+                                    &(curr_obj_property->keyname_constraints));
+          }
+          else
+          {
+            if (curr_obj_property->keyname_constraints.common_constraints.type
+                ==JSON_VALUE_ARRAY)
+              res= validate_array(je, const_je, curr_step);
+            else
+            {
+              res= validate_object(je, const_je, curr_step+1, count);
+            }
+          }
+          if (res)
+            return true;
+        }
+        else
+          json_skip_level(je);
+        break;
+      }
+    }
+  }
+  if (curr_step->object_constraints.has_required)
+  {
+    LEX_CSTRING *temp_key_word;
+    if (json_scan_next(&required_arr))
+      return true;
+    int curr_level= (&required_arr)->stack_p;
+    while(json_scan_next(&required_arr) == 0 &&
+          (&required_arr)->stack_p >= curr_level)
+    {
+      if (json_read_value(&required_arr))
+        return 1;
+      if (!(temp_key_word= (LEX_CSTRING*) my_hash_search( &temp,
+                                        (const uchar*) (&required_arr)->value,
+                                        (&required_arr)->value_len)))
+        return true;
+    }
+  }
+  return false;
+}
+
+/*
+ Return true if does not validate
+*/
+int validate_non_scalar(json_engine_t *je,
+                        json_engine_t *const_je,
+                         st_json_schema *curr_step,
+                         int *count)
+{
+  if(curr_step->common_constraints.enum_values.is_enum_inited)
+  {
+    int res= false;
+    st_scalar_enum *val= (st_scalar_enum*)alloc_root(current_thd->mem_root, je->value_len);
+    DYNAMIC_STRING a_res;
+    if (init_dynamic_string(&a_res, NULL, 0, 0))
+      goto free_curr;
+    if (json_normalize(&a_res, (const char*)je->value-1, je->value_len,
+                        je->s.cs))
+    {
+      res= true;
+      goto free_curr;
+    }
+    val->str[a_res.length]= '\0';
+    val->str= a_res.str;
+    if (my_hash_search(
+             &curr_step->common_constraints.enum_values.enum_hash,
+             (const uchar*)val->str, a_res.length))
+    {
+      res= true;
+      goto free_curr;
+    }
+    free_curr:
+      dynstr_free(&a_res);
+      return res;
+  }
+  if (je->value_type == JSON_VALUE_ARRAY)
+    return validate_array(je, const_je, curr_step);
+  else if (je->value_type == JSON_VALUE_OBJECT)
+    return validate_object(je, const_je, curr_step, count);
+  return false;
+}
+
+/*
+Return true if not validated
+*/
+int validate_against_schema(json_engine_t *je,
+                             st_json_schema *curr_step,
+                             int *count)
+{
+  json_engine_t const_je;
+  if (curr_step->common_constraints.const_value.has_const)
+    const_je= *je;
+  if (json_read_value(je) ||
+      je->value_type != curr_step->common_constraints.type)
+    return true;
+
+  if (json_value_scalar(je) && validate_scalar(je, curr_step))
+    return true;
+  else if (validate_non_scalar(je, &const_je, curr_step, count))
+     return true;
+
+  return false;
+}
+
+/*
+  Return true if error or does not validate
+*/
+int validate_json_schema(THD *thd, json_engine_t *je,
+                         st_json_schema *curr_step, int *count)
+{
+ initialize_curr_constraint(curr_step);
+
+  while (json_scan_next(je)== 0 && je->stack_p)
+  {
+     switch(je->state)
+     {
+       case JST_KEY:
+       {
+          const uchar *key_end, *key_start= je->s.c_str;
+          do
+          {
+            key_end= je->s.c_str;
+          } while (json_read_keyname_chr(je) == 0);
+
+          if (json_read_value(je))
+            return true;
+          if (handle_keyword(thd, (const char*)key_start,
+                            &curr_step[*count], je,
+                            key_end - key_start, count))
+            return true;
+          break;
+       }
+       case JST_OBJ_END:
+          if ((&curr_step[*count])->object_constraints.level_property-1 ==
+               je->stack_p)
+            (*count)--;
+     }
+  }
+  return false;
+}
+
+longlong Item_func_json_schema_valid::val_int()
+{
+  json_engine_t ve;
+  int count= 0, res= 1;
+
+  if (!a2_parsed)
+  {
+    val= args[1]->val_json(&tmp_val);
+    a2_parsed= a2_constant;
+  }
+
+  if (val == 0)
+  {
+    null_value= 1;
+    return 0;
+  }
+
+  json_scan_start(&ve, val->charset(), (const uchar *) val->ptr(),
+                  (const uchar *) val->end());
+
+  if (validate_against_schema(&ve, curr_step, &count))
+    res= 0;
+  if (unlikely(ve.s.error))
+    res= 0;
+
+  for (int i= 0; i <= count; i++)
+  {
+    if (curr_step[i].common_constraints.type > JSON_VALUE_UNINITIALIZED)
+    {
+      if (curr_step[i].common_constraints.type == JSON_VALUE_OBJECT)
+      {
+        st_object_constraints *curr_obj= &curr_step[i].object_constraints;
+        if (curr_obj->is_properties_inited)
+          my_hash_free(&curr_obj->properties);
+      }
+      if (curr_step[i].common_constraints.enum_values.is_enum_inited)
+      {
+        st_enum *curr_enum= &curr_step[i].common_constraints.enum_values;
+        if (curr_enum->is_enum_inited)
+          my_hash_free(&curr_enum->enum_hash);
+      }
+    }
+  }
+  if (ve.s.error)
+    report_json_error(val, &ve, 1);
+  return res;
+}
+
+bool Item_func_json_schema_valid::fix_length_and_dec(THD *thd)
+{
+  a2_constant= args[1]->const_item();
+  a2_parsed= FALSE;
+  set_maybe_null();
+
+  String *js= args[0]->val_json(&tmp_js);
+  json_engine_t je;
+  int res= 0;
+
+  if ((null_value= args[0]->null_value))
+    return 0;
+  res= json_scan_start(&je, js->charset(), (const uchar *) js->ptr(),
+                  (const uchar *) js->ptr() + js->length());
+
+  res= validate_json_schema(thd, &je, curr_step, &count);
+
+  if (je.s.error)
+   res= 1;
+
+  return res | Item_bool_func::fix_length_and_dec(thd);
+}
