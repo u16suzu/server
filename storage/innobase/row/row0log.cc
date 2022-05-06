@@ -1681,11 +1681,13 @@ row_log_table_apply_delete_low(
 
 	btr_cur_pessimistic_delete(&error, FALSE, btr_pcur_get_btr_cur(pcur),
 				   BTR_CREATE_FLAG, false, mtr);
-	mtr_commit(mtr);
-
 	if (error != DB_SUCCESS) {
-		return(error);
+err_exit:
+		mtr->commit();
+		return error;
 	}
+
+	mtr->commit();
 
 	while ((index = dict_table_get_next_index(index)) != NULL) {
 		if (index->type & DICT_FTS) {
@@ -1696,9 +1698,12 @@ row_log_table_apply_delete_low(
 			row, ext, index, heap);
 		mtr->start();
 		index->set_modified(*mtr);
-		btr_pcur_open(index, entry, PAGE_CUR_LE,
-			      BTR_MODIFY_TREE | BTR_LATCH_FOR_DELETE,
-			      pcur, mtr);
+		error = btr_pcur_open(index, entry, PAGE_CUR_LE,
+				      BTR_MODIFY_TREE | BTR_LATCH_FOR_DELETE,
+				      pcur, mtr);
+		if (error) {
+			goto err_exit;
+		}
 #ifdef UNIV_DEBUG
 		switch (btr_pcur_get_btr_cur(pcur)->flag) {
 		case BTR_CUR_DELETE_REF:
@@ -1777,9 +1782,12 @@ row_log_table_apply_delete(
 
 	mtr_start(&mtr);
 	index->set_modified(mtr);
-	btr_pcur_open(index, old_pk, PAGE_CUR_LE,
-		      BTR_MODIFY_TREE | BTR_LATCH_FOR_DELETE,
-		      &pcur, &mtr);
+	dberr_t err = btr_pcur_open(index, old_pk, PAGE_CUR_LE,
+				    BTR_MODIFY_TREE | BTR_LATCH_FOR_DELETE,
+				    &pcur, &mtr);
+	if (err != DB_SUCCESS) {
+		goto all_done;
+	}
 #ifdef UNIV_DEBUG
 	switch (btr_pcur_get_btr_cur(&pcur)->flag) {
 	case BTR_CUR_DELETE_REF:
@@ -1806,7 +1814,7 @@ all_done:
 		ROW_T_INSERT was skipped or
 		ROW_T_UPDATE was interpreted as ROW_T_DELETE
 		due to BLOBs having been freed by rollback. */
-		return(DB_SUCCESS);
+		return err;
 	}
 
 	offsets = rec_get_offsets(btr_pcur_get_rec(&pcur), index, nullptr,
@@ -1908,10 +1916,24 @@ row_log_table_apply_update(
 		return(error);
 	}
 
-	mtr_start(&mtr);
+	mtr.start();
 	index->set_modified(mtr);
-	btr_pcur_open(index, old_pk, PAGE_CUR_LE,
-		      BTR_MODIFY_TREE, &pcur, &mtr);
+	error = btr_pcur_open(index, old_pk, PAGE_CUR_LE,
+			      BTR_MODIFY_TREE, &pcur, &mtr);
+	if (error != DB_SUCCESS) {
+func_exit:
+		mtr.commit();
+func_exit_committed:
+		ut_ad(mtr.has_committed());
+
+		if (error != DB_SUCCESS) {
+			/* Report the erroneous row using the new
+			version of the table. */
+			innobase_row_to_mysql(dup->table, log->table, row);
+		}
+
+		return error;
+	}
 #ifdef UNIV_DEBUG
 	switch (btr_pcur_get_btr_cur(&pcur)->flag) {
 	case BTR_CUR_DELETE_REF:
@@ -1961,18 +1983,7 @@ row_log_table_apply_update(
 		index, entry, btr_pcur_get_rec(&pcur), cur_offsets,
 		false, NULL, heap, dup->table, &error);
 	if (error != DB_SUCCESS || !update->n_fields) {
-func_exit:
-		mtr.commit();
-func_exit_committed:
-		ut_ad(mtr.has_committed());
-
-		if (error != DB_SUCCESS) {
-			/* Report the erroneous row using the new
-			version of the table. */
-			innobase_row_to_mysql(dup->table, log->table, row);
-		}
-
-		return error;
+		goto func_exit;
 	}
 
 	const bool	pk_updated
@@ -2069,7 +2080,7 @@ func_exit_committed:
 			dtuple_copy_v_fields(old_row, old_pk);
 		}
 
-		mtr_commit(&mtr);
+		mtr.commit();
 
 		entry = row_build_index_entry(old_row, old_ext, index, heap);
 		if (!entry) {
@@ -2077,7 +2088,7 @@ func_exit_committed:
 			return(DB_CORRUPTION);
 		}
 
-		mtr_start(&mtr);
+		mtr.start();
 		index->set_modified(mtr);
 
 		if (ROW_FOUND != row_search_index_entry(
@@ -2095,7 +2106,7 @@ func_exit_committed:
 			break;
 		}
 
-		mtr_commit(&mtr);
+		mtr.commit();
 
 		entry = row_build_index_entry(row, NULL, index, heap);
 		error = row_ins_sec_index_entry_low(
@@ -2109,7 +2120,7 @@ func_exit_committed:
 			thr_get_trx(thr)->error_key_num = n_index;
 		}
 
-		mtr_start(&mtr);
+		mtr.start();
 		index->set_modified(mtr);
 	}
 

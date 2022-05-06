@@ -1509,6 +1509,10 @@ file_checked:
 				buf_block_t* block = buf_page_get(
 					page_id_t(0, 0), 0,
 					RW_SX_LATCH, &mtr);
+				/* The first page of the system tablespace
+				should already have been successfully
+				accessed earlier during startup. */
+				ut_a(block);
 				ulint size = mach_read_from_4(
 					FSP_HEADER_OFFSET + FSP_SIZE
 					+ block->page.frame);
@@ -1712,6 +1716,11 @@ file_checked:
 				page_id_t(IBUF_SPACE_ID,
 					  FSP_IBUF_HEADER_PAGE_NO),
 				0, RW_X_LATCH, &mtr);
+			if (UNIV_UNLIKELY(!block)) {
+			corrupted_old_page:
+				mtr.commit();
+				return srv_init_abort(DB_CORRUPTION);
+			}
 			fil_block_check_type(*block, FIL_PAGE_TYPE_SYS, &mtr);
 			/* Already MySQL 3.23.53 initialized
 			FSP_IBUF_TREE_ROOT_PAGE_NO to
@@ -1719,16 +1728,25 @@ file_checked:
 			block = buf_page_get(
 				page_id_t(TRX_SYS_SPACE, TRX_SYS_PAGE_NO),
 				0, RW_X_LATCH, &mtr);
+			if (UNIV_UNLIKELY(!block)) {
+				goto corrupted_old_page;
+			}
 			fil_block_check_type(*block, FIL_PAGE_TYPE_TRX_SYS,
 					     &mtr);
 			block = buf_page_get(
 				page_id_t(TRX_SYS_SPACE,
 					  FSP_FIRST_RSEG_PAGE_NO),
 				0, RW_X_LATCH, &mtr);
+			if (UNIV_UNLIKELY(!block)) {
+				goto corrupted_old_page;
+			}
 			fil_block_check_type(*block, FIL_PAGE_TYPE_SYS, &mtr);
 			block = buf_page_get(
 				page_id_t(TRX_SYS_SPACE, FSP_DICT_HDR_PAGE_NO),
 				0, RW_X_LATCH, &mtr);
+			if (UNIV_UNLIKELY(!block)) {
+				goto corrupted_old_page;
+			}
 			fil_block_check_type(*block, FIL_PAGE_TYPE_SYS, &mtr);
 			mtr.commit();
 		}

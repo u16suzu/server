@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 2016, 2018, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2017, 2021, MariaDB Corporation.
+Copyright (c) 2017, 2022, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -267,8 +267,9 @@ rtr_pcur_getnext_from_path(
 				  next_rec.page_no), zip_size,
 			rw_latch, NULL, BUF_GET, mtr);
 
-		if (block == NULL) {
-			continue;
+		if (!block) {
+			found = false;
+			break;
 		}
 
 		rtr_info->tree_blocks[tree_idx] = block;
@@ -618,6 +619,7 @@ rtr_pcur_open(
 			ut_ad(low_match == n_fields);
 		}
 	}
+        // FIXME: return ret
 }
 
 /* Get the rtree page father.
@@ -744,7 +746,7 @@ static void rtr_get_father_node(
 				tuple, PAGE_CUR_RTREE_LOCATE, btr_cur,
 				level, BTR_CONT_MODIFY_TREE,
 				true, mtr);
-
+                        // FIXME: check for !ret
 			ut_ad(ret && btr_cur->low_match == n_fields);
 		}
 	}

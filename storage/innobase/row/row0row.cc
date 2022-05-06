@@ -1301,7 +1301,10 @@ row_search_index_entry(
 		rtr_pcur_open(index, entry, PAGE_CUR_RTREE_LOCATE,
 			      mode, pcur, mtr);
 	} else {
-		btr_pcur_open(index, entry, PAGE_CUR_LE, mode, pcur, mtr);
+		if (btr_pcur_open(index, entry, PAGE_CUR_LE, mode, pcur, mtr)
+		    != DB_SUCCESS) {
+			return ROW_NOT_FOUND;
+		}
 	}
 
 	switch (btr_pcur_get_btr_cur(pcur)->flag) {

@@ -96,22 +96,6 @@ inline roll_ptr_t trx_read_roll_ptr(const byte* ptr)
 	return mach_read_from_7(ptr);
 }
 
-/** Gets an undo log page and x-latches it.
-@param[in]	page_id		page id
-@param[in,out]	mtr		mini-transaction
-@return pointer to page x-latched */
-UNIV_INLINE
-buf_block_t*
-trx_undo_page_get(const page_id_t page_id, mtr_t* mtr);
-
-/** Gets an undo log page and s-latches it.
-@param[in]	page_id		page id
-@param[in,out]	mtr		mini-transaction
-@return pointer to page s-latched */
-UNIV_INLINE
-buf_block_t*
-trx_undo_page_get_s_latched(const page_id_t page_id, mtr_t* mtr);
-
 /** Get the next record in an undo log.
 @param[in]      undo_page       undo log page
 @param[in]      rec             undo record offset in the page
@@ -140,8 +124,8 @@ trx_undo_get_prev_rec(buf_block_t *&block, uint16_t rec, uint32_t page_no,
 @param[in,out]  mtr     mini-transaction
 @return undo log record, the page latched, NULL if none */
 trx_undo_rec_t*
-trx_undo_get_next_rec(buf_block_t *&block, uint16_t rec, uint32_t page_no,
-                      uint16_t offset, mtr_t *mtr);
+trx_undo_get_next_rec(const buf_block_t *&block, uint16_t rec,
+                      uint32_t page_no, uint16_t offset, mtr_t *mtr);
 
 /** Get the first record in an undo log.
 @param[in]      space   undo log header space
@@ -153,7 +137,7 @@ trx_undo_get_next_rec(buf_block_t *&block, uint16_t rec, uint32_t page_no,
 @return undo log record, the page latched, NULL if none */
 trx_undo_rec_t*
 trx_undo_get_first_rec(const fil_space_t &space, uint32_t page_no,
-                       uint16_t offset, ulint mode, buf_block_t*& block,
+                       uint16_t offset, ulint mode, const buf_block_t*& block,
                        mtr_t *mtr);
 
 /** Initialize an undo log page.
@@ -335,7 +319,7 @@ class UndorecApplier
   /** Undo log block page id */
   page_id_t page_id;
   /** Undo log record pointer */
-  trx_undo_rec_t *undo_rec;
+  const trx_undo_rec_t *undo_rec;
   /** Offset of the undo log record within the block */
   uint16_t offset;
   /** Transaction id of the undo log */

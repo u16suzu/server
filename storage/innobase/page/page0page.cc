@@ -480,7 +480,6 @@ page_copy_rec_list_end_no_locks(
 		page_cur_move_to_next(&cur1);
 	}
 
-	btr_assert_not_corrupted(new_block, index);
 	ut_a(page_is_comp(new_page) == page_rec_is_comp(rec));
 	ut_a(mach_read_from_2(new_page + srv_page_size - 10) == (ulint)
 	     (page_is_comp(new_page) ? PAGE_NEW_INFIMUM : PAGE_OLD_INFIMUM));

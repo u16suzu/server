@@ -131,9 +131,6 @@ trx_sys_print_mysql_binlog_offset();
 bool
 trx_sys_create_rsegs();
 
-/** The automatically created system rollback segment has this id */
-#define TRX_SYS_SYSTEM_RSEG_ID	0
-
 /** The offset of the transaction system header on the page */
 #define	TRX_SYS		FSEG_PAGE_DATA
 

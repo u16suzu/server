@@ -327,8 +327,12 @@ static bool row_undo_rec_get(undo_node_t* node)
 	mtr_t	mtr;
 	mtr.start();
 
-	buf_block_t* undo_page = trx_undo_page_get_s_latched(
-		page_id_t(undo->rseg->space->id, undo->top_page_no), &mtr);
+	buf_block_t* undo_page = buf_page_get(
+		page_id_t(undo->rseg->space->id, undo->top_page_no),
+		0, RW_S_LATCH, &mtr);
+	if (!undo_page) {
+		return false;
+	}
 
 	uint16_t offset = undo->top_offset;
 

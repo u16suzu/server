@@ -3009,9 +3009,8 @@ inline buf_block_t *recv_sys_t::recover_low(const page_id_t page_id,
   if (UNIV_UNLIKELY(block != b))
   {
     /* The page happened to exist in the buffer pool, or it
-    was just being read in. Before buf_page_get_with_no_latch()
-    returned to buf_page_create(), all changes must have been
-    applied to the page already. */
+    was just being read in. Before the exclusive page latch was acquired by
+    buf_page_create(), all changes to the page must have been applied. */
     ut_ad(pages.find(page_id) == pages.end());
     mtr.commit();
     block= nullptr;

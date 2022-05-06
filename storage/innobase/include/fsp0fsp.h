@@ -207,7 +207,7 @@ typedef	byte	fseg_inode_t;
 	(16 + 3 * FLST_BASE_NODE_SIZE			\
 	 + FSEG_FRAG_ARR_N_SLOTS * FSEG_FRAG_SLOT_SIZE)
 
-static constexpr uint32_t FSEG_MAGIC_N_VALUE= 97937874;
+static constexpr byte FSEG_MAGIC_N_BYTES[4]={0x05,0xd6,0x69,0xd2};
 
 #define	FSEG_FILLFACTOR		8	/* If this value is x, then if
 					the number of unused but reserved

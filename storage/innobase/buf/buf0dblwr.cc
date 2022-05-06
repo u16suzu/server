@@ -84,6 +84,11 @@ start_again:
   mtr.start();
 
   buf_block_t *trx_sys_block= buf_dblwr_trx_sys_get(&mtr);
+  if (!trx_sys_block)
+  {
+    mtr.commit();
+    return false;
+  }
 
   if (mach_read_from_4(TRX_SYS_DOUBLEWRITE + TRX_SYS_DOUBLEWRITE_MAGIC +
                        trx_sys_block->page.frame) ==

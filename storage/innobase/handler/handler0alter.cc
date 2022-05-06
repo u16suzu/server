@@ -1997,8 +1997,13 @@ static bool innobase_table_is_empty(const dict_table_t *table,
   bool next_page= false;
 
   mtr.start();
-  btr_pcur_open_at_index_side(true, clust_index, BTR_SEARCH_LEAF,
-                              &pcur, true, 0, &mtr);
+  if (btr_pcur_open_at_index_side(true, clust_index, BTR_SEARCH_LEAF,
+                                  &pcur, true, 0, &mtr) != DB_SUCCESS)
+  {
+non_empty:
+    mtr.commit();
+    return false;
+  }
   btr_pcur_move_to_next_user_rec(&pcur, &mtr);
   if (!rec_is_metadata(btr_pcur_get_rec(&pcur), *clust_index))
     btr_pcur_move_to_prev_on_page(&pcur);
@@ -2016,9 +2021,10 @@ next_page:
     }
 
     next_page= false;
-    block= page_cur_get_block(cur);
     block= btr_block_get(*clust_index, next_page_no, BTR_SEARCH_LEAF, false,
                          &mtr);
+    if (!block)
+      goto non_empty;
     btr_leaf_page_release(page_cur_get_block(cur), BTR_SEARCH_LEAF, &mtr);
     page_cur_set_before_first(block, cur);
     page_cur_move_to_next(cur);
@@ -2029,9 +2035,7 @@ next_page:
   {
     if (ignore_delete_marked)
       goto scan_leaf;
-non_empty:
-    mtr.commit();
-    return false;
+    goto non_empty;
   }
   else if (!page_rec_is_supremum(rec))
     goto non_empty;
@@ -5884,8 +5888,11 @@ add_all_virtual:
 	mtr.start();
 	index->set_modified(mtr);
 	btr_pcur_t pcur;
-	btr_pcur_open_at_index_side(true, index, BTR_MODIFY_TREE, &pcur, true,
-				    0, &mtr);
+	dberr_t err = btr_pcur_open_at_index_side(true, index, BTR_MODIFY_TREE,
+						  &pcur, true, 0, &mtr);
+	if (err != DB_SUCCESS) {
+		goto func_exit;
+	}
 	ut_ad(btr_pcur_is_before_first_on_page(&pcur));
 	btr_pcur_move_to_next_on_page(&pcur);
 
@@ -5898,7 +5905,6 @@ add_all_virtual:
 		NULL, trx, ctx->heap, NULL);
 	const bool is_root = block->page.id().page_no() == index->page;
 
-	dberr_t err = DB_SUCCESS;
 	if (rec_is_metadata(rec, *index)) {
 		ut_ad(page_rec_is_user_rec(rec));
 		if (is_root

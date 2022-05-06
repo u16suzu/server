@@ -1613,8 +1613,11 @@ row_ins_check_foreign_constraint(
 
 	dtuple_set_n_fields_cmp(entry, foreign->n_fields);
 
-	btr_pcur_open(check_index, entry, PAGE_CUR_GE,
-		      BTR_SEARCH_LEAF, &pcur, &mtr);
+	err = btr_pcur_open(check_index, entry, PAGE_CUR_GE,
+			    BTR_SEARCH_LEAF, &pcur, &mtr);
+	if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
+		goto end_scan;
+	}
 
 	/* Scan index records and check if there is a matching record */
 
@@ -1822,7 +1825,7 @@ do_possible_lock_wait:
 	}
 
 exit_func:
-	if (heap != NULL) {
+	if (UNIV_LIKELY_NULL(heap)) {
 		mem_heap_free(heap);
 	}
 
@@ -2021,8 +2024,6 @@ row_ins_scan_sec_index_for_duplicate(
 	int		cmp;
 	ulint		n_fields_cmp;
 	btr_pcur_t	pcur;
-	dberr_t		err		= DB_SUCCESS;
-	ulint		allow_duplicates;
 	rec_offs	offsets_[REC_OFFS_SEC_INDEX_SIZE];
 	rec_offs*	offsets		= offsets_;
 	DBUG_ENTER("row_ins_scan_sec_index_for_duplicate");
@@ -2052,10 +2053,13 @@ row_ins_scan_sec_index_for_duplicate(
 	n_fields_cmp = dtuple_get_n_fields_cmp(entry);
 
 	dtuple_set_n_fields_cmp(entry, n_unique);
+	const auto allow_duplicates = thr_get_trx(thr)->duplicates;
 
-	btr_pcur_open(index, entry, PAGE_CUR_GE, BTR_SEARCH_LEAF, &pcur, mtr);
-
-	allow_duplicates = thr_get_trx(thr)->duplicates;
+	dberr_t err = btr_pcur_open(index, entry, PAGE_CUR_GE, BTR_SEARCH_LEAF,
+				    &pcur, mtr);
+	if (err != DB_SUCCESS) {
+		goto end_scan;
+	}
 
 	/* Scan index records and check if there is a duplicate */
 
@@ -2443,9 +2447,8 @@ row_ins_index_entry_big_rec(
 	mtr_t		mtr;
 	btr_pcur_t	pcur;
 	rec_t*		rec;
-	dberr_t		error;
 
-	ut_ad(dict_index_is_clust(index));
+	ut_ad(index->is_primary());
 
 	DEBUG_SYNC_C_IF_THD(thd, "before_row_ins_extern_latch");
 
@@ -2456,8 +2459,12 @@ row_ins_index_entry_big_rec(
 		index->set_modified(mtr);
 	}
 
-	btr_pcur_open(index, entry, PAGE_CUR_LE, BTR_MODIFY_TREE,
-		      &pcur, &mtr);
+	dberr_t error = btr_pcur_open(index, entry, PAGE_CUR_LE,
+				      BTR_MODIFY_TREE, &pcur, &mtr);
+	if (error != DB_SUCCESS) {
+		return error;
+	}
+
 	rec = btr_pcur_get_rec(&pcur);
 	offsets = rec_get_offsets(rec, index, offsets, index->n_core_fields,
 				  ULINT_UNDEFINED, heap);

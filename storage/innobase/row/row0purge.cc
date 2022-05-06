@@ -821,8 +821,6 @@ skip_secondaries:
 			= upd_get_nth_field(node->update, i);
 
 		if (dfield_is_ext(&ufield->new_val)) {
-			buf_block_t*	block;
-			byte*		data_field;
 			bool		is_insert;
 			ulint		rseg_id;
 			uint32_t	page_no;
@@ -866,22 +864,24 @@ skip_secondaries:
 			latching order if we would only later latch the
 			root page of such a tree! */
 
-			btr_root_block_get(index, RW_SX_LATCH, &mtr);
+			if (!btr_root_block_get(index, RW_SX_LATCH, &mtr)) {
+			} else if (buf_block_t* block =
+				   buf_page_get(page_id_t(rseg.space->id,
+							  page_no),
+						0, RW_X_LATCH, &mtr)) {
+				byte* data_field = block->page.frame
+					+ offset + internal_offset;
 
-			block = buf_page_get(
-				page_id_t(rseg.space->id, page_no),
-				0, RW_X_LATCH, &mtr);
+				ut_a(dfield_get_len(&ufield->new_val)
+				     >= BTR_EXTERN_FIELD_REF_SIZE);
+				btr_free_externally_stored_field(
+					index,
+					data_field
+					+ dfield_get_len(&ufield->new_val)
+					- BTR_EXTERN_FIELD_REF_SIZE,
+					NULL, NULL, block, 0, false, &mtr);
+			}
 
-			data_field = buf_block_get_frame(block)
-				+ offset + internal_offset;
-
-			ut_a(dfield_get_len(&ufield->new_val)
-			     >= BTR_EXTERN_FIELD_REF_SIZE);
-			btr_free_externally_stored_field(
-				index,
-				data_field + dfield_get_len(&ufield->new_val)
-				- BTR_EXTERN_FIELD_REF_SIZE,
-				NULL, NULL, block, 0, false, &mtr);
 			mtr.commit();
 		}
 	}
@@ -897,6 +897,7 @@ skip_secondaries:
 	row_purge_upd_exist_or_extern_func(node,undo_rec)
 #endif /* UNIV_DEBUG */
 
+MY_ATTRIBUTE((nonnull,warn_unused_result))
 /** Parses the row reference and other info in a modify undo log record.
 @param[in]	node		row undo node
 @param[in]	undo_rec	record to purge
@@ -913,17 +914,13 @@ row_purge_parse_undo_rec(
 	bool*			updated_extern)
 {
 	dict_index_t*	clust_index;
-	byte*		ptr;
 	undo_no_t	undo_no;
 	table_id_t	table_id;
 	roll_ptr_t	roll_ptr;
 	byte		info_bits;
 	ulint		type;
 
-	ut_ad(node != NULL);
-	ut_ad(thr != NULL);
-
-	ptr = trx_undo_rec_get_pars(
+	const byte* ptr = trx_undo_rec_get_pars(
 		undo_rec, &type, &node->cmpl_info,
 		updated_extern, &undo_no, &table_id);
 

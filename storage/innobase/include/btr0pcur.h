@@ -24,8 +24,7 @@ The index tree persistent cursor
 Created 2/23/1996 Heikki Tuuri
 *******************************************************/
 
-#ifndef btr0pcur_h
-#define btr0pcur_h
+#pragma once
 
 #include "dict0dict.h"
 #include "btr0cur.h"
@@ -93,7 +92,7 @@ btr_pcur_free(
 
 /**************************************************************//**
 Initializes and opens a persistent cursor to an index tree. */
-UNIV_INLINE
+inline
 dberr_t
 btr_pcur_open_low(
 /*==============*/
@@ -110,7 +109,8 @@ btr_pcur_open_low(
 	btr_pcur_t*	cursor, /*!< in: memory buffer for persistent cursor */
 	ib_uint64_t	autoinc,/*!< in: PAGE_ROOT_AUTO_INC to be written
 				(0 if none) */
-	mtr_t*		mtr);	/*!< in: mtr */
+	mtr_t*		mtr)	/*!< in: mtr */
+	MY_ATTRIBUTE((nonnull, warn_unused_result));
 #define btr_pcur_open(i,t,md,l,c,m)				\
 	btr_pcur_open_low(i,0,t,md,l,c,0,m)
 /**************************************************************//**
@@ -161,7 +161,7 @@ btr_pcur_open_at_index_side(
 	ulint		level,		/*!< in: level to search for
 					(0=leaf) */
 	mtr_t*		mtr)		/*!< in/out: mini-transaction */
-	MY_ATTRIBUTE((nonnull));
+	MY_ATTRIBUTE((nonnull,warn_unused_result));
 /**************************************************************//**
 Gets the up_match value for a pcur after a search.
 @return number of matched fields at the cursor or to the right if
@@ -180,34 +180,7 @@ ulint
 btr_pcur_get_low_match(
 /*===================*/
 	const btr_pcur_t*	cursor); /*!< in: persistent cursor */
-/**************************************************************//**
-If mode is PAGE_CUR_G or PAGE_CUR_GE, opens a persistent cursor on the first
-user record satisfying the search condition, in the case PAGE_CUR_L or
-PAGE_CUR_LE, on the last user record. If no such user record exists, then
-in the first case sets the cursor after last in tree, and in the latter case
-before first in tree. The latching mode must be BTR_SEARCH_LEAF or
-BTR_MODIFY_LEAF. */
-void
-btr_pcur_open_on_user_rec(
-	dict_index_t*	index,		/*!< in: index */
-	const dtuple_t*	tuple,		/*!< in: tuple on which search done */
-	page_cur_mode_t	mode,		/*!< in: PAGE_CUR_L, ... */
-	ulint		latch_mode,	/*!< in: BTR_SEARCH_LEAF or
-					BTR_MODIFY_LEAF */
-	btr_pcur_t*	cursor,		/*!< in: memory buffer for persistent
-					cursor */
-	mtr_t*		mtr);		/*!< in: mtr */
-/**********************************************************************//**
-Positions a cursor at a randomly chosen position within a B-tree.
-@return true if the index is available and we have put the cursor, false
-if the index is unavailable */
-UNIV_INLINE
-bool
-btr_pcur_open_at_rnd_pos(
-	dict_index_t*	index,		/*!< in: index */
-	ulint		latch_mode,	/*!< in: BTR_SEARCH_LEAF, ... */
-	btr_pcur_t*	cursor,		/*!< in/out: B-tree pcur */
-	mtr_t*		mtr);		/*!< in: mtr */
+
 /**************************************************************//**
 Frees the possible memory heap of a persistent cursor and sets the latch
 mode of the persistent cursor to BTR_NO_LATCHES.
@@ -508,6 +481,29 @@ inline rec_t *btr_pcur_get_rec(const btr_pcur_t *cursor)
   return cursor->btr_cur.page_cur.rec;
 }
 
-#include "btr0pcur.inl"
+/** Open a cursor on the first user record satisfying the search condition;
+in case of no match, after the last index record. */
+MY_ATTRIBUTE((nonnull, warn_unused_result))
+inline
+dberr_t
+btr_pcur_open_on_user_rec(
+	dict_index_t*	index,		/*!< in: index */
+	const dtuple_t*	tuple,		/*!< in: tuple on which search done */
+	page_cur_mode_t	mode,		/*!< in: PAGE_CUR_L, ... */
+	ulint		latch_mode,	/*!< in: BTR_SEARCH_LEAF or
+					BTR_MODIFY_LEAF */
+	btr_pcur_t*	cursor,		/*!< in: memory buffer for persistent
+					cursor */
+	mtr_t*		mtr)		/*!< in: mtr */
+{
+  ut_ad(mode == PAGE_CUR_GE || mode == PAGE_CUR_G);
+  ut_ad(latch_mode == BTR_SEARCH_LEAF || latch_mode == BTR_MODIFY_LEAF);
+  if (dberr_t err= btr_pcur_open(index, tuple, mode, latch_mode, cursor, mtr))
+    return err;
+  if (!btr_pcur_is_after_last_on_page(cursor))
+    return DB_SUCCESS;
+  btr_pcur_move_to_next_user_rec(cursor, mtr); // FIXME: check for error
+  return DB_SUCCESS;
+}
 
-#endif
+#include "btr0pcur.inl"

@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 2014, 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2017, 2020, MariaDB Corporation.
+Copyright (c) 2017, 2022, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -93,7 +93,8 @@ rtr_page_split_and_insert(
 	mem_heap_t**	heap,	/*!< in/out: pointer to memory heap, or NULL */
 	const dtuple_t*	tuple,	/*!< in: tuple to insert */
 	ulint		n_ext,	/*!< in: number of externally stored columns */
-	mtr_t*		mtr);	/*!< in: mtr */
+	mtr_t*		mtr,	/*!< in: mtr */
+	dberr_t*	err);	/*!< out: error code */
 
 /**************************************************************//**
 Sets the child node mbr in a node pointer. */

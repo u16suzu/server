@@ -2895,7 +2895,8 @@ row_rename_table_for_mysql(
 		DEBUG_SYNC_C("innodb_rename_in_cache");
 		/* The following call will also rename the .ibd file */
 		err = dict_table_rename_in_cache(
-			table, new_name, !new_is_tmp);
+			table, span<const char>{new_name,strlen(new_name)},
+			false);
 		if (err != DB_SUCCESS) {
 			goto rollback_and_exit;
 		}

@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 2014, 2019, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2017, 2021, MariaDB Corporation.
+Copyright (c) 2017, 2022, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -60,18 +60,24 @@ PageBulk::init()
 		alloc_mtr.start();
 		m_index->set_modified(alloc_mtr);
 
+		dberr_t err = DB_SUCCESS;
 		uint32_t n_reserved;
 		if (!fsp_reserve_free_extents(&n_reserved,
 					      m_index->table->space,
 					      1, FSP_NORMAL, &alloc_mtr)) {
+			err = DB_OUT_OF_FILE_SPACE;
+oom:
 			alloc_mtr.commit();
 			m_mtr.commit();
-			return(DB_OUT_OF_FILE_SPACE);
+			return err;
 		}
 
 		/* Allocate a new page. */
 		new_block = btr_page_alloc(m_index, 0, FSP_UP, m_level,
-					   &alloc_mtr, &m_mtr);
+					   &alloc_mtr, &m_mtr, &err);
+		if (!new_block) {
+			goto oom;
+		}
 
 		m_index->table->space->release_free_extents(n_reserved);
 
@@ -103,9 +109,12 @@ PageBulk::init()
 	} else {
 		new_block = btr_block_get(*m_index, m_page_no, RW_X_LATCH,
 					  false, &m_mtr);
+		if (!new_block) {
+			m_mtr.commit();
+			return(DB_CORRUPTION);
+		}
 
 		new_page = buf_block_get_frame(new_block);
-		ut_ad(new_block->page.id().page_no() == m_page_no);
 
 		ut_ad(page_dir_get_n_heap(new_page) == PAGE_HEAP_NO_USER_LOW);
 
@@ -1207,6 +1216,13 @@ BtrBulk::finish(dberr_t	err)
 		ut_ad(last_page_no != FIL_NULL);
 		last_block = btr_block_get(*m_index, last_page_no, RW_X_LATCH,
 					   false, &mtr);
+		if (!last_block) {
+			err = DB_CORRUPTION;
+err_exit:
+			mtr.commit();
+			return err;
+		}
+
 		first_rec = page_rec_get_next(
 			page_get_infimum_rec(last_block->page.frame));
 		ut_ad(page_rec_is_user_rec(first_rec));
@@ -1214,8 +1230,7 @@ BtrBulk::finish(dberr_t	err)
 		/* Copy last page to root page. */
 		err = root_page_bulk.init();
 		if (err != DB_SUCCESS) {
-			mtr.commit();
-			return(err);
+			goto err_exit;
 		}
 		root_page_bulk.copyIn(first_rec);
 		root_page_bulk.finish();

@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (C) 2012, 2014 Facebook, Inc. All Rights Reserved.
-Copyright (C) 2014, 2021, MariaDB Corporation.
+Copyright (C) 2014, 2022, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -507,6 +507,9 @@ btr_defragment_n_pages(
 
 		blocks[i] = btr_block_get(*index, page_no, RW_X_LATCH, true,
 					  mtr);
+		if (!blocks[i]) {
+			return nullptr;
+		}
 	}
 
 	if (n_pages == 1) {

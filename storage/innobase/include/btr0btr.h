@@ -68,9 +68,9 @@ enum btr_latch_mode {
 	/** Continue modifying the entire B-tree. */
 	BTR_CONT_MODIFY_TREE = 34,
 	/** Search the previous record. */
-	BTR_SEARCH_PREV = 35,
+	BTR_SEARCH_PREV = 64 | BTR_SEARCH_LEAF,
 	/** Modify the previous record. */
-	BTR_MODIFY_PREV = 36,
+	BTR_MODIFY_PREV = 64 | BTR_MODIFY_LEAF,
 	/** Start searching the entire B-tree. */
 	BTR_SEARCH_TREE = 37,
 	/** Continue searching the entire B-tree. */
@@ -172,20 +172,6 @@ record is in spatial index */
 				| BTR_LATCH_FOR_DELETE		\
 				| BTR_MODIFY_EXTERNAL)))
 
-/** Report that an index page is corrupted.
-@param[in]	buffer block
-@param[in]	index tree */
-ATTRIBUTE_COLD ATTRIBUTE_NORETURN __attribute__((nonnull))
-void btr_corruption_report(const buf_block_t* block,const dict_index_t* index);
-
-/** Assert that a B-tree page is not corrupted.
-@param block buffer block containing a B-tree page
-@param index the B-tree index */
-#define btr_assert_not_corrupted(block, index)		\
-	if (!!page_is_comp(buf_block_get_frame(block))	\
-	    != index->table->not_redundant())		\
-		btr_corruption_report(block, index)
-
 /**************************************************************//**
 Checks and adjusts the root node of a tree during IMPORT TABLESPACE.
 @return error code, or DB_SUCCESS */
@@ -202,30 +188,9 @@ btr_root_adjust_on_import(
 @param[in]	merge	whether change buffer merge should be attempted
 @param[in,out]	mtr	mini-transaction
 @return block */
-inline buf_block_t *btr_block_get(const dict_index_t &index,
-                                  uint32_t page, ulint mode, bool merge,
-                                  mtr_t *mtr)
-{
-	dberr_t err;
-
-	if (buf_block_t* block = buf_page_get_gen(
-		    page_id_t(index.table->space->id, page),
-		    index.table->space->zip_size(), mode, NULL, BUF_GET,
-		    mtr, &err, merge && !index.is_clust())) {
-		ut_ad(err == DB_SUCCESS);
-		return block;
-	} else {
-		ut_ad(err != DB_SUCCESS);
-
-		if (err == DB_DECRYPTION_FAILED) {
-			if (index.table) {
-				index.table->file_unreadable = true;
-			}
-		}
-
-		return NULL;
-	}
-}
+buf_block_t *btr_block_get(const dict_index_t &index,
+                           uint32_t page, ulint mode, bool merge,
+                           mtr_t *mtr);
 
 /**************************************************************//**
 Gets the index id field of a page.
@@ -379,7 +344,8 @@ btr_root_raise_and_insert(
 				that can be emptied, or NULL */
 	const dtuple_t*	tuple,	/*!< in: tuple to insert */
 	ulint		n_ext,	/*!< in: number of externally stored columns */
-	mtr_t*		mtr)	/*!< in: mtr */
+	mtr_t*		mtr,	/*!< in: mtr */
+	dberr_t*	err)	/*!< out: error code */
 	MY_ATTRIBUTE((warn_unused_result));
 /*************************************************************//**
 Reorganizes an index page.
@@ -437,7 +403,8 @@ btr_page_split_and_insert(
 				that can be emptied, or NULL */
 	const dtuple_t*	tuple,	/*!< in: tuple to insert */
 	ulint		n_ext,	/*!< in: number of externally stored columns */
-	mtr_t*		mtr)	/*!< in: mtr */
+	mtr_t*		mtr,	/*!< in: mtr */
+	dberr_t*	err)	/*!< out: error code */
 	MY_ATTRIBUTE((warn_unused_result));
 /*******************************************************//**
 Inserts a data tuple to a tree on a non-leaf level. It is assumed
@@ -540,9 +507,10 @@ btr_page_alloc(
 					in the tree */
 	mtr_t*		mtr,		/*!< in/out: mini-transaction
 					for the allocation */
-	mtr_t*		init_mtr)	/*!< in/out: mini-transaction
+	mtr_t*		init_mtr,	/*!< in/out: mini-transaction
 					for x-latching and initializing
 					the page */
+	dberr_t*	err)		/*!< out: error code */
 	MY_ATTRIBUTE((warn_unused_result));
 /** Empty an index page (possibly the root page). @see btr_page_create().
 @param[in,out]	block		page to be emptied

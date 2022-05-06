@@ -369,12 +369,8 @@ dberr_t
 dict_table_rename_in_cache(
 /*=======================*/
 	dict_table_t*	table,		/*!< in/out: table */
-	const char*	new_name,	/*!< in: new name */
-	bool		rename_also_foreigns,
-					/*!< in: in ALTER TABLE we want
-					to preserve the original table name
-					in constraints which reference it */
-	bool		replace_new_file = false)
+	span<const char> new_name,	/*!< in: new name */
+	bool		replace_new_file)
 					/*!< in: whether to replace the
 					file with the new name
 					(as part of rolling back TRUNCATE) */

@@ -2015,7 +2015,7 @@ struct dict_table_t {
   @param new_name     name of the table
   @param replace      whether to replace the file with the new name
                       (as part of rolling back TRUNCATE) */
-  dberr_t rename_tablespace(const char *new_name, bool replace) const;
+  dberr_t rename_tablespace(span<const char> new_name, bool replace) const;
 
 private:
 	/** Initialize instant->field_map.

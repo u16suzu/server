@@ -2510,7 +2510,7 @@ buf_page_get_low(
 		/* After DISCARD TABLESPACE, the tablespace would not exist,
 		but in IMPORT TABLESPACE, PageConverter::operator() must
 		replace any old pages, which were not evicted during DISCARD.
-		Skip the assertion on space_page_size. */
+		Skip the assertion on zip_size. */
 		break;
 	case BUF_PEEK_IF_IN_POOL:
 	case BUF_GET_IF_IN_POOL:
@@ -2518,7 +2518,7 @@ buf_page_get_low(
 		because it does not really matter. */
 		break;
 	default:
-		ut_error;
+		MY_ASSERT_UNREACHABLE();
 	case BUF_GET_POSSIBLY_FREED:
 		break;
 	case BUF_GET_NO_LATCH:
@@ -2748,7 +2748,8 @@ ignore_block:
 		return nullptr;
 	}
 
-	ut_ad(mode == BUF_GET_IF_IN_POOL || block->zip_size() == zip_size);
+	ut_ad(mode == BUF_GET_IF_IN_POOL || mode == BUF_PEEK_IF_IN_POOL
+	      || block->zip_size() == zip_size);
 
 	if (UNIV_UNLIKELY(!block->page.frame)) {
 		if (!block->page.lock.x_lock_try()) {

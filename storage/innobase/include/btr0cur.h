@@ -203,7 +203,7 @@ btr_cur_open_at_index_side(
 	ulint		level,		/*!< in: level to search for
 					(0=leaf) */
 	mtr_t*		mtr)		/*!< in/out: mini-transaction */
-	MY_ATTRIBUTE((nonnull));
+	MY_ATTRIBUTE((nonnull, warn_unused_result));
 
 /**********************************************************************//**
 Positions a cursor at a randomly chosen position within a B-tree.
@@ -214,7 +214,8 @@ btr_cur_open_at_rnd_pos(
 	dict_index_t*	index,		/*!< in: index */
 	ulint		latch_mode,	/*!< in: BTR_SEARCH_LEAF, ... */
 	btr_cur_t*	cursor,		/*!< in/out: B-tree cursor */
-	mtr_t*		mtr);		/*!< in: mtr */
+	mtr_t*		mtr)		/*!< in: mtr */
+	MY_ATTRIBUTE((nonnull,warn_unused_result));
 /*************************************************************//**
 Tries to perform an insert to a page in an index tree, next to cursor.
 It is assumed that mtr holds an x-latch on the page. The operation does

@@ -1119,7 +1119,6 @@ row_undo_mod_upd_exist_sec(
 static bool row_undo_mod_parse_undo_rec(undo_node_t* node, bool dict_locked)
 {
 	dict_index_t*	clust_index;
-	byte*		ptr;
 	undo_no_t	undo_no;
 	table_id_t	table_id;
 	trx_id_t	trx_id;
@@ -1134,8 +1133,9 @@ static bool row_undo_mod_parse_undo_rec(undo_node_t* node, bool dict_locked)
 	ut_ad(node->trx->in_rollback);
 	ut_ad(!trx_undo_roll_ptr_is_insert(node->roll_ptr));
 
-	ptr = trx_undo_rec_get_pars(node->undo_rec, &type, &cmpl_info,
-				    &dummy_extern, &undo_no, &table_id);
+	const byte *ptr = trx_undo_rec_get_pars(
+		node->undo_rec, &type, &cmpl_info,
+		&dummy_extern, &undo_no, &table_id);
 	node->rec_type = type;
 
 	if (node->state == UNDO_UPDATE_PERSISTENT) {

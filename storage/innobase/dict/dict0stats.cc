@@ -1113,8 +1113,6 @@ btr_estimate_number_of_different_key_vals(dict_index_t* index,
 	uintmax_t	n_sample_pages=1; /* number of pages to sample */
 	ulint		not_empty_flag	= 0;
 	ulint		total_external_size = 0;
-	ulint		i;
-	ulint		j;
 	uintmax_t	add_on;
 	mtr_t		mtr;
 	mem_heap_t*	heap		= NULL;
@@ -1221,19 +1219,15 @@ btr_estimate_number_of_different_key_vals(dict_index_t* index,
 
 	/* We sample some pages in the index to get an estimate */
 
-	for (i = 0; i < n_sample_pages; i++) {
+	for (ulint i = 0; i < n_sample_pages; i++) {
 		mtr.start();
 
-		bool	available;
-
-		available = btr_cur_open_at_rnd_pos(index, BTR_SEARCH_LEAF,
-						    &cursor, &mtr);
-
-		if (!available || index->table->bulk_trx_id != bulk_trx_id) {
+		if (!btr_cur_open_at_rnd_pos(index, BTR_SEARCH_LEAF,
+					     &cursor, &mtr)
+		    || index->table->bulk_trx_id != bulk_trx_id
+		    || !index->is_readable()) {
 			mtr.commit();
-			mem_heap_free(heap);
-
-			return result;
+			goto exit_loop;
 		}
 
 		/* Count the number of different key values for each prefix of
@@ -1241,11 +1235,6 @@ btr_estimate_number_of_different_key_vals(dict_index_t* index,
 		the index record uniquely in the B-tree, then we subtract one
 		because otherwise our algorithm would give a wrong estimate
 		for an index where there is just one key value. */
-
-		if (!index->is_readable()) {
-			mtr.commit();
-			goto exit_loop;
-		}
 
 		page = btr_cur_get_page(&cursor);
 
@@ -1286,7 +1275,7 @@ btr_estimate_number_of_different_key_vals(dict_index_t* index,
 				    index, stats_null_not_equal,
 				    &matched_fields);
 
-			for (j = matched_fields; j < n_cols; j++) {
+			for (ulint j = matched_fields; j < n_cols; j++) {
 				/* We add one if this index record has
 				a different prefix from the previous */
 
@@ -1342,7 +1331,7 @@ exit_loop:
 
 	result.reserve(n_cols);
 
-	for (j = 0; j < n_cols; j++) {
+	for (ulint j = 0; j < n_cols; j++) {
 		index_field_stats_t stat;
 
 		stat.n_diff_key_vals
@@ -1381,7 +1370,6 @@ exit_loop:
 	}
 
 	mem_heap_free(heap);
-
 	return result;
 }
 
@@ -1642,9 +1630,12 @@ dict_stats_analyze_index_level(
 	/* Position pcur on the leftmost record on the leftmost page
 	on the desired level. */
 
-	btr_pcur_open_at_index_side(
-		true, index, BTR_SEARCH_TREE_ALREADY_S_LATCHED,
-		&pcur, true, level, mtr);
+	if (btr_pcur_open_at_index_side(
+		    true, index, BTR_SEARCH_TREE_ALREADY_S_LATCHED,
+		    &pcur, true, level, mtr) != DB_SUCCESS) {
+		goto func_exit;
+	}
+
 	btr_pcur_move_to_next_on_page(&pcur);
 
 	page = btr_pcur_get_page(&pcur);
@@ -1655,11 +1646,17 @@ dict_stats_analyze_index_level(
 	ut_ad(btr_pcur_get_rec(&pcur)
 	      == page_rec_get_next_const(page_get_infimum_rec(page)));
 
-	/* check that we are indeed on the desired level */
-	ut_a(btr_page_get_level(page) == level);
+	prev_rec = NULL;
+	prev_rec_is_copied = false;
 
-	/* there should not be any pages on the left */
-	ut_a(!page_has_prev(page));
+	/* no records by default */
+	*total_recs = 0;
+
+	*total_pages = 0;
+
+	if (page_has_prev(page) || btr_page_get_level(page) != level) {
+		goto func_exit;
+	}
 
 	if (REC_INFO_MIN_REC_FLAG & rec_get_info_bits(
 		    btr_pcur_get_rec(&pcur), page_is_comp(page))) {
@@ -1669,19 +1666,11 @@ dict_stats_analyze_index_level(
 			ut_ad(index->is_instant());
 			btr_pcur_move_to_next_user_rec(&pcur, mtr);
 		}
-	} else {
+	} else if (UNIV_UNLIKELY(level != 0)) {
 		/* The first record on the leftmost page must be
 		marked as such on each level except the leaf level. */
-		ut_a(level == 0);
+		goto func_exit;
 	}
-
-	prev_rec = NULL;
-	prev_rec_is_copied = false;
-
-	/* no records by default */
-	*total_recs = 0;
-
-	*total_pages = 0;
 
 	/* iterate over all user records on this level
 	and compare each two adjacent ones, even the last on page
@@ -1885,7 +1874,7 @@ dict_stats_analyze_index_level(
 #endif /* UNIV_STATS_DEBUG */
 
 	btr_leaf_page_release(btr_pcur_get_block(&pcur), BTR_SEARCH_LEAF, mtr);
-
+func_exit:
 	ut_free(prev_rec_buf);
 	mem_heap_free(heap);
 }
@@ -2096,7 +2085,7 @@ dict_stats_analyze_index_below_cur(
 					 &mtr, &err,
 					 !index->is_clust()
 					 && 1 == btr_page_get_level(page));
-
+		// FIXME: check for null
 		page = buf_block_get_frame(block);
 
 		if (page_is_leaf(page)) {
@@ -2241,47 +2230,42 @@ dict_stats_analyze_index_for_n_prefix(
 #endif
 
 	ut_ad(mtr->memo_contains(index->lock, MTR_MEMO_SX_LOCK));
+	ut_ad(n_diff_data->level);
 
 	/* Position pcur on the leftmost record on the leftmost page
 	on the desired level. */
 
-	btr_pcur_open_at_index_side(
-		true, index, BTR_SEARCH_TREE_ALREADY_S_LATCHED,
-		&pcur, true, n_diff_data->level, mtr);
+	n_diff_data->n_diff_all_analyzed_pages = 0;
+	n_diff_data->n_external_pages_sum = 0;
+
+	if (btr_pcur_open_at_index_side(true, index,
+					BTR_SEARCH_TREE_ALREADY_S_LATCHED,
+					&pcur, true, n_diff_data->level, mtr)
+	    != DB_SUCCESS) {
+		return;
+	}
+
 	btr_pcur_move_to_next_on_page(&pcur);
 
 	page = btr_pcur_get_page(&pcur);
 
 	const rec_t*	first_rec = btr_pcur_get_rec(&pcur);
 
-	/* We shouldn't be scanning the leaf level. The caller of this function
-	should have stopped the descend on level 1 or higher. */
-	ut_ad(n_diff_data->level > 0);
-	ut_ad(!page_is_leaf(page));
-
 	/* The page must not be empty, except when
 	it is the root page (and the whole index is empty). */
-	ut_ad(btr_pcur_is_on_user_rec(&pcur));
-	ut_ad(first_rec == page_rec_get_next_const(page_get_infimum_rec(page)));
-
-	/* check that we are indeed on the desired level */
-	ut_a(btr_page_get_level(page) == n_diff_data->level);
-
-	/* there should not be any pages on the left */
-	ut_a(!page_has_prev(page));
-
-	/* check whether the first record on the leftmost page is marked
-	as such; we are on a non-leaf level */
-	ut_a(rec_get_info_bits(first_rec, page_is_comp(page))
-	     & REC_INFO_MIN_REC_FLAG);
+	if (page_has_prev(page)
+	    || !btr_pcur_is_on_user_rec(&pcur)
+	    || btr_page_get_level(page) != n_diff_data->level
+	    || first_rec != page_rec_get_next_const(page_get_infimum_rec(page))
+	    || !(rec_get_info_bits(first_rec, page_is_comp(page))
+		 & REC_INFO_MIN_REC_FLAG)) {
+		return;
+	}
 
 	const ib_uint64_t	last_idx_on_level = boundaries->at(
 		static_cast<unsigned>(n_diff_data->n_diff_on_level - 1));
 
 	rec_idx = 0;
-
-	n_diff_data->n_diff_all_analyzed_pages = 0;
-	n_diff_data->n_external_pages_sum = 0;
 
 	for (i = 0; i < n_diff_data->n_leaf_pages_to_analyze; i++) {
 		/* there are n_diff_on_level elements

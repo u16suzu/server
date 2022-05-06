@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2019, 2022, MariaDB Corporation.
+Copyright (c) 2018, 2022, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -659,16 +659,15 @@ rtr_adjust_upper_level(
 
 	const uint32_t next_page_no = btr_page_get_next(block->page.frame);
 
-	if (next_page_no != FIL_NULL) {
-		buf_block_t*	next_block = btr_block_get(
-			*index, next_page_no, RW_X_LATCH, false, mtr);
+	if (next_page_no == FIL_NULL) {
+	} else if (buf_block_t*	next_block =
+		   btr_block_get(*index, next_page_no, RW_X_LATCH,
+				 false, mtr)) {
 #ifdef UNIV_BTR_DEBUG
-		ut_a(page_is_comp(next_block->page.frame)
-		     == page_is_comp(block->page.frame));
+		// FIXME
 		ut_a(btr_page_get_prev(next_block->page.frame)
 		     == block->page.id().page_no());
 #endif /* UNIV_BTR_DEBUG */
-
 		btr_page_set_prev(next_block, new_page_no, mtr);
 	}
 
@@ -874,7 +873,8 @@ rtr_page_split_and_insert(
 	mem_heap_t**	heap,	/*!< in/out: pointer to memory heap, or NULL */
 	const dtuple_t*	tuple,	/*!< in: tuple to insert */
 	ulint		n_ext,	/*!< in: number of externally stored columns */
-	mtr_t*		mtr)	/*!< in: mtr */
+	mtr_t*		mtr,	/*!< in: mtr */
+	dberr_t*	err)	/*!< out: error code */
 {
 	buf_block_t*		block;
 	page_t*			page;
@@ -966,7 +966,7 @@ func_start:
 	/* Allocate a new page to the index */
 	const uint16_t page_level = btr_page_get_level(page);
 	new_block = btr_page_alloc(cursor->index, page_id.page_no() + 1,
-				   FSP_UP, page_level, mtr, mtr);
+				   FSP_UP, page_level, mtr, mtr, err);
 	if (!new_block) {
 		return NULL;
 	}
@@ -1313,7 +1313,6 @@ rtr_page_copy_rec_list_end_no_locks(
 		page_cur_move_to_next(&cur1);
 	}
 
-	btr_assert_not_corrupted(new_block, index);
 	ut_a(page_is_comp(new_page) == page_rec_is_comp(rec));
 	ut_a(mach_read_from_2(new_page + srv_page_size - 10) == (ulint)
 	     (page_is_comp(new_page) ? PAGE_NEW_INFIMUM : PAGE_OLD_INFIMUM));

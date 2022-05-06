@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1996, 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2016, 2021, MariaDB Corporation.
+Copyright (c) 2016, 2022, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -412,7 +412,7 @@ btr_pcur_t::restore_position(ulint restore_latch_mode, mtr_t *mtr)
 		mode = PAGE_CUR_L;
 		break;
 	default:
-		ut_error;
+		MY_ASSERT_UNREACHABLE();
 		mode = PAGE_CUR_UNSUPP;
 	}
 
@@ -544,29 +544,12 @@ btr_pcur_move_backward_from_page(
 				record of the current page */
 	mtr_t*		mtr)	/*!< in: mtr */
 {
-	ulint		prev_page_no;
-	page_t*		page;
-	buf_block_t*	prev_block;
-	ulint		latch_mode;
-	ulint		latch_mode2;
-
 	ut_ad(cursor->latch_mode != BTR_NO_LATCHES);
 	ut_ad(btr_pcur_is_before_first_on_page(cursor));
 	ut_ad(!btr_pcur_is_before_first_in_tree(cursor));
 
-	latch_mode = cursor->latch_mode;
-
-	if (latch_mode == BTR_SEARCH_LEAF) {
-
-		latch_mode2 = BTR_SEARCH_PREV;
-
-	} else if (latch_mode == BTR_MODIFY_LEAF) {
-
-		latch_mode2 = BTR_MODIFY_PREV;
-	} else {
-		latch_mode2 = 0; /* To eliminate compiler warning */
-		ut_error;
-	}
+	const ulint latch_mode = cursor->latch_mode;
+	ut_ad(latch_mode == BTR_SEARCH_LEAF || latch_mode == BTR_MODIFY_LEAF);
 
 	btr_pcur_store_position(cursor, mtr);
 
@@ -574,31 +557,26 @@ btr_pcur_move_backward_from_page(
 
 	mtr_start(mtr);
 
-	cursor->restore_position(latch_mode2, mtr);
+	static_assert(BTR_SEARCH_PREV == (64 | BTR_SEARCH_LEAF), "");
+	static_assert(BTR_MODIFY_PREV == (64 | BTR_MODIFY_LEAF), "");
 
-	page = btr_pcur_get_page(cursor);
+	cursor->restore_position(64 | latch_mode, mtr);
 
-	prev_page_no = btr_page_get_prev(page);
+	buf_block_t* prev_block = btr_pcur_get_btr_cur(cursor)->left_block;
 
-	if (prev_page_no == FIL_NULL) {
+	if (!page_has_prev(btr_pcur_get_page(cursor))) {
 	} else if (btr_pcur_is_before_first_on_page(cursor)) {
-
-		prev_block = btr_pcur_get_btr_cur(cursor)->left_block;
-
 		btr_leaf_page_release(btr_pcur_get_block(cursor),
 				      latch_mode, mtr);
 
 		page_cur_set_after_last(prev_block,
 					btr_pcur_get_page_cur(cursor));
 	} else {
-
 		/* The repositioned cursor did not end on an infimum
 		record on a page. Cursor repositioning acquired a latch
 		also on the previous page, but we do not need the latch:
 		release it. */
-
 		prev_block = btr_pcur_get_btr_cur(cursor)->left_block;
-
 		btr_leaf_page_release(prev_block, latch_mode, mtr);
 	}
 
@@ -637,39 +615,4 @@ btr_pcur_move_to_prev(
 	btr_pcur_move_to_prev_on_page(cursor);
 
 	return(TRUE);
-}
-
-/**************************************************************//**
-If mode is PAGE_CUR_G or PAGE_CUR_GE, opens a persistent cursor on the first
-user record satisfying the search condition, in the case PAGE_CUR_L or
-PAGE_CUR_LE, on the last user record. If no such user record exists, then
-in the first case sets the cursor after last in tree, and in the latter case
-before first in tree. The latching mode must be BTR_SEARCH_LEAF or
-BTR_MODIFY_LEAF. */
-void
-btr_pcur_open_on_user_rec(
-	dict_index_t*	index,		/*!< in: index */
-	const dtuple_t*	tuple,		/*!< in: tuple on which search done */
-	page_cur_mode_t	mode,		/*!< in: PAGE_CUR_L, ... */
-	ulint		latch_mode,	/*!< in: BTR_SEARCH_LEAF or
-					BTR_MODIFY_LEAF */
-	btr_pcur_t*	cursor,		/*!< in: memory buffer for persistent
-					cursor */
-	mtr_t*		mtr)		/*!< in: mtr */
-{
-	btr_pcur_open_low(index, 0, tuple, mode, latch_mode, cursor, 0, mtr);
-
-	if ((mode == PAGE_CUR_GE) || (mode == PAGE_CUR_G)) {
-
-		if (btr_pcur_is_after_last_on_page(cursor)) {
-
-			btr_pcur_move_to_next_user_rec(cursor, mtr);
-		}
-	} else {
-		ut_ad((mode == PAGE_CUR_LE) || (mode == PAGE_CUR_L));
-
-		/* Not implemented yet */
-
-		ut_error;
-	}
 }

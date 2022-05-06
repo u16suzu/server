@@ -174,14 +174,6 @@ in LA! */
 #define buf_page_get(ID, SIZE, LA, MTR)					\
 	buf_page_get_gen(ID, SIZE, LA, NULL, BUF_GET, MTR)
 
-/**************************************************************//**
-Use these macros to bufferfix a page with no latching. Remember not to
-read the contents of the page unless you know it is safe. Do not modify
-the contents of the page! We have separated this case, because it is
-error-prone programming not to set a latch, and it should be used
-with care. */
-#define buf_page_get_with_no_latch(ID, SIZE, MTR)	\
-	buf_page_get_gen(ID, SIZE, RW_NO_LATCH, NULL, BUF_GET_NO_LATCH, MTR)
 /** Try to acquire a page latch.
 @param rw_latch      RW_S_LATCH or RW_X_LATCH
 @param block         guessed block

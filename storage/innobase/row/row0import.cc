@@ -369,11 +369,11 @@ public:
 	}
 
 private:
-	/** Begin import, position the cursor on the first record. */
-	void	open() UNIV_NOTHROW;
+  /** Begin import, position the cursor on the first record. */
+  inline bool open() noexcept;
 
-	/** Close the persistent curosr and commit the mini-transaction. */
-	void	close() UNIV_NOTHROW;
+  /** Close the persistent cursor and commit the mini-transaction. */
+  void close() noexcept { m_mtr.commit(); btr_pcur_close(&m_pcur); }
 
 	/** Position the cursor on the next record.
 	@return DB_SUCCESS or error code */
@@ -1493,14 +1493,13 @@ Purge delete marked records.
 dberr_t
 IndexPurge::garbage_collect() UNIV_NOTHROW
 {
-	dberr_t	err;
 	ibool	comp = dict_table_is_comp(m_index->table);
 
 	/* Open the persistent cursor and start the mini-transaction. */
 
-	open();
+	dberr_t err = open() ? next() : DB_CORRUPTION;
 
-	while ((err = next()) == DB_SUCCESS) {
+	for (; err == DB_SUCCESS; err = next()) {
 
 		rec_t*	rec = btr_pcur_get_rec(&m_pcur);
 		ibool	deleted = rec_get_deleted_flag(rec, comp);
@@ -1521,31 +1520,25 @@ IndexPurge::garbage_collect() UNIV_NOTHROW
 
 /**
 Begin import, position the cursor on the first record. */
-void
-IndexPurge::open() UNIV_NOTHROW
+inline bool IndexPurge::open() noexcept
 {
-	mtr_start(&m_mtr);
+  m_mtr.start();
+  m_mtr.set_log_mode(MTR_LOG_NO_REDO);
 
-	mtr_set_log_mode(&m_mtr, MTR_LOG_NO_REDO);
+  if (btr_pcur_open_at_index_side(true, m_index, BTR_MODIFY_LEAF,
+                                  &m_pcur, true, 0, &m_mtr) != DB_SUCCESS)
+    return false;
 
-	btr_pcur_open_at_index_side(
-		true, m_index, BTR_MODIFY_LEAF, &m_pcur, true, 0, &m_mtr);
-	btr_pcur_move_to_next_user_rec(&m_pcur, &m_mtr);
-	if (rec_is_metadata(btr_pcur_get_rec(&m_pcur), *m_index)) {
-		ut_ad(btr_pcur_is_on_user_rec(&m_pcur));
-		/* Skip the metadata pseudo-record. */
-	} else {
-		btr_pcur_move_to_prev_on_page(&m_pcur);
-	}
-}
-
-/**
-Close the persistent curosr and commit the mini-transaction. */
-void
-IndexPurge::close() UNIV_NOTHROW
-{
-	btr_pcur_close(&m_pcur);
-	mtr_commit(&m_mtr);
+  btr_pcur_move_to_next_user_rec(&m_pcur, &m_mtr);
+  if (rec_is_metadata(btr_pcur_get_rec(&m_pcur), *m_index))
+  {
+    if (!btr_pcur_is_on_user_rec(&m_pcur))
+      return false;
+    /* Skip the metadata pseudo-record. */
+  }
+  else
+    btr_pcur_move_to_prev_on_page(&m_pcur);
+  return true;
 }
 
 /**
@@ -2351,26 +2344,20 @@ row_import_set_sys_max_row_id(
 
 	mtr_set_log_mode(&mtr, MTR_LOG_NO_REDO);
 
-	btr_pcur_open_at_index_side(
-		false,		// High end
-		index,
-		BTR_SEARCH_LEAF,
-		&pcur,
-		true,		// Init cursor
-		0,		// Leaf level
-		&mtr);
+	if (btr_pcur_open_at_index_side(false, index, BTR_SEARCH_LEAF,
+					&pcur, true, 0, &mtr) == DB_SUCCESS) {
+		btr_pcur_move_to_prev_on_page(&pcur);
+		rec = btr_pcur_get_rec(&pcur);
 
-	btr_pcur_move_to_prev_on_page(&pcur);
-	rec = btr_pcur_get_rec(&pcur);
-
-	/* Check for empty table. */
-	if (page_rec_is_infimum(rec)) {
-		/* The table is empty. */
-	} else if (rec_is_metadata(rec, *index)) {
-		/* The clustered index contains the metadata record only,
-		that is, the table is empty. */
-	} else {
-		row_id = mach_read_from_6(rec);
+		/* Check for empty table. */
+		if (page_rec_is_infimum(rec)) {
+			/* The table is empty. */
+		} else if (rec_is_metadata(rec, *index)) {
+			/* The clustered index contains the metadata
+			record only, that is, the table is empty. */
+		} else {
+			row_id = mach_read_from_6(rec);
+		}
 	}
 
 	mtr_commit(&mtr);

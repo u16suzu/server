@@ -375,7 +375,7 @@ retry:
 static bool row_undo_ins_parse_undo_rec(undo_node_t* node, bool dict_locked)
 {
 	dict_index_t*	clust_index;
-	byte*		ptr;
+	const byte*	ptr;
 	undo_no_t	undo_no;
 	table_id_t	table_id;
 	ulint		dummy;
@@ -421,16 +421,14 @@ static bool row_undo_ins_parse_undo_rec(undo_node_t* node, bool dict_locked)
 		      == !is_system_tablespace(table->space_id));
 		size_t len = mach_read_from_2(node->undo_rec)
 			+ size_t(node->undo_rec - ptr) - 2;
-		ptr[len] = 0;
-		const char* name = reinterpret_cast<char*>(ptr);
-		if (strcmp(table->name.m_name, name)) {
-			dict_table_rename_in_cache(
-				table, name,
-				!dict_table_t::is_temporary_name(name),
-				true);
+		const span<const char> name(reinterpret_cast<const char*>(ptr),
+					    len);
+		if (strlen(table->name.m_name) != len
+		    || memcmp(table->name.m_name, ptr, len)) {
+			dict_table_rename_in_cache(table, name, true);
 		} else if (table->space) {
 			const auto s = table->space->name();
-			if (len != s.size() || memcmp(name, s.data(), len)) {
+			if (len != s.size() || memcmp(ptr, s.data(), len)) {
 				table->rename_tablespace(name, true);
 			}
 		}

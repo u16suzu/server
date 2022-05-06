@@ -1539,20 +1539,27 @@ static void innodb_drop_database(handlerton*, char *path)
     we will "manually" purge the tablespaces that belong to the
     records that we delete-marked. */
 
-    mem_heap_t *heap= mem_heap_create(100);
-    dtuple_t *tuple= dtuple_create(heap, 1);
-    dfield_t *dfield= dtuple_get_nth_field(tuple, 0);
+    dfield_t dfield;
+    dtuple_t tuple{
+      0,1,1,&dfield,0,nullptr
+#ifdef UNIV_DEBUG
+      , DATA_TUPLE_MAGIC_N
+#endif
+    };
     dict_index_t* sys_index= UT_LIST_GET_FIRST(dict_sys.sys_tables->indexes);
     btr_pcur_t pcur;
     namebuf[len++]= '/';
-    dfield_set_data(dfield, namebuf, len);
-    dict_index_copy_types(tuple, sys_index, 1);
+    dfield_set_data(&dfield, namebuf, len);
+    dict_index_copy_types(&tuple, sys_index, 1);
     std::vector<pfs_os_file_t> to_close;
     mtr_t mtr;
     mtr.start();
-    for (btr_pcur_open_on_user_rec(sys_index, tuple, PAGE_CUR_GE,
+    err= btr_pcur_open_on_user_rec(sys_index, &tuple, PAGE_CUR_GE,
                                    BTR_SEARCH_LEAF, &pcur, &mtr);
-         btr_pcur_is_on_user_rec(&pcur);
+    if (err != DB_SUCCESS)
+      goto err_exit;
+
+    for (; btr_pcur_is_on_user_rec(&pcur);
          btr_pcur_move_to_next_user_rec(&pcur, &mtr))
     {
       const rec_t *rec= btr_pcur_get_rec(&pcur);
@@ -1593,8 +1600,8 @@ static void innodb_drop_database(handlerton*, char *path)
           to_close.emplace_back(detached);
       }
     }
+  err_exit:
     mtr.commit();
-    mem_heap_free(heap);
     for (pfs_os_file_t detached : to_close)
       os_file_close(detached);
     /* Any changes must be persisted before we return. */
@@ -2073,8 +2080,10 @@ static void drop_garbage_tables_after_restore()
   ut_d(purge_sys.stop_FTS());
 
   mtr.start();
-  btr_pcur_open_at_index_side(true, dict_sys.sys_tables->indexes.start,
-                              BTR_SEARCH_LEAF, &pcur, true, 0, &mtr);
+  if (btr_pcur_open_at_index_side(true, dict_sys.sys_tables->indexes.start,
+                                  BTR_SEARCH_LEAF, &pcur, true, 0, &mtr) !=
+      DB_SUCCESS)
+    goto all_fail;
   for (;;)
   {
     btr_pcur_move_to_next_user_rec(&pcur, &mtr);
@@ -2161,6 +2170,7 @@ fail:
     pcur.restore_position(BTR_SEARCH_LEAF, &mtr);
   }
 
+all_fail:
   mtr.commit();
   trx->free();
   ut_free(pcur.old_rec_buf);

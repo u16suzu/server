@@ -1224,6 +1224,7 @@ re_scan:
 		}
 
 		match->matched_recs->clear();
+		// FIXME: check for !cur_block
 
 		rtr_cur_search_with_match(
 			cur_block, index,
@@ -1355,8 +1356,9 @@ sel_set_rec_lock(
 
 /*********************************************************************//**
 Opens a pcur to a table index. */
+MY_ATTRIBUTE((warn_unused_result, nonnull))
 static
-void
+bool
 row_sel_open_pcur(
 /*==============*/
 	plan_t*		plan,	/*!< in: table plan */
@@ -1367,6 +1369,10 @@ row_sel_open_pcur(
 	que_node_t*	exp;
 	ulint		n_fields;
 	ulint		i;
+
+	ut_ad(!plan->n_rows_prefetched);
+	ut_ad(!plan->n_rows_fetched);
+	ut_ad(!plan->cursor_at_end);
 
 	index = plan->index;
 
@@ -1404,19 +1410,16 @@ row_sel_open_pcur(
 		btr_pcur_open_with_no_init(index, plan->tuple, plan->mode,
 					   BTR_SEARCH_LEAF, &plan->pcur,
 					   NULL, mtr);
+		plan->pcur_is_open = true;
 	} else {
-		/* Open the cursor to the start or the end of the index
-		(FALSE: no init) */
-
-		btr_pcur_open_at_index_side(plan->asc, index, BTR_SEARCH_LEAF,
-					    &(plan->pcur), false, 0, mtr);
+		plan->pcur_is_open =
+			btr_pcur_open_at_index_side(plan->asc, index,
+						    BTR_SEARCH_LEAF,
+						    &plan->pcur, false, 0, mtr)
+			== DB_SUCCESS;
 	}
 
-	ut_ad(plan->n_rows_prefetched == 0);
-	ut_ad(plan->n_rows_fetched == 0);
-	ut_ad(plan->cursor_at_end == FALSE);
-
-	plan->pcur_is_open = TRUE;
+	return plan->pcur_is_open;
 }
 
 /*********************************************************************//**
@@ -1551,7 +1554,9 @@ row_sel_try_search_shortcut(
 	ut_ad(plan->unique_search);
 	ut_ad(!plan->must_get_clust);
 
-	row_sel_open_pcur(plan, mtr);
+	if (!row_sel_open_pcur(plan, mtr)) {
+		return SEL_RETRY;
+	}
 
 	const rec_t* rec = btr_pcur_get_rec(&(plan->pcur));
 
@@ -1732,7 +1737,10 @@ table_loop:
 	if (!plan->pcur_is_open) {
 		/* Evaluate the expressions to build the search tuple and
 		open the cursor */
-		row_sel_open_pcur(plan, &mtr);
+		if (!row_sel_open_pcur(plan, &mtr)) {
+			err = DB_CORRUPTION;
+			goto mtr_commit_exit;
+		}
 
 		cursor_just_opened = TRUE;
 
@@ -2263,10 +2271,8 @@ stop_for_a_while:
 	plan->stored_cursor_rec_processed = FALSE;
 	btr_pcur_store_position(&(plan->pcur), &mtr);
 
-	mtr.commit();
-
 	err = DB_SUCCESS;
-	goto func_exit;
+	goto mtr_commit_exit;
 
 commit_mtr_for_a_while:
 	/* Stores the cursor position and commits &mtr; this is used if
@@ -2290,7 +2296,7 @@ lock_wait_or_error:
 
 	plan->stored_cursor_rec_processed = FALSE;
 	btr_pcur_store_position(&(plan->pcur), &mtr);
-
+mtr_commit_exit:
 	mtr.commit();
 
 func_exit:
@@ -3408,6 +3414,7 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 				btr_pcur_get_block(prebuilt->pcur)->page.id(),
 				btr_pcur_get_block(prebuilt->pcur)->zip_size(),
 				RW_NO_LATCH, NULL, BUF_GET, mtr, &err);
+			ut_ad(block); // FIXME: avoid crash
 			mem_heap_t*	heap = mem_heap_create(256);
 			dtuple_t*       tuple = dict_index_build_data_tuple(
 				rec, sec_index, true,
@@ -6103,8 +6110,10 @@ row_search_get_max_rec(
 	btr_pcur_t	pcur;
 	const rec_t*	rec;
 	/* Open at the high/right end (false), and init cursor */
-	btr_pcur_open_at_index_side(
-		false, index, BTR_SEARCH_LEAF, &pcur, true, 0, mtr);
+	if (btr_pcur_open_at_index_side(false, index, BTR_SEARCH_LEAF, &pcur,
+					true, 0, mtr) != DB_SUCCESS) {
+		return nullptr;
+	}
 
 	do {
 		const page_t*	page;
