@@ -156,14 +156,13 @@ public:
 					  false);
 			rtr_info_update_btr(&ins_cur, &rtr_info);
 
-			btr_cur_search_to_nth_level(m_index, 0, dtuple,
-						    PAGE_CUR_RTREE_INSERT,
-						    BTR_MODIFY_LEAF, &ins_cur,
-						    0, &mtr);
+			error = btr_cur_search_to_nth_level(
+				m_index, 0, dtuple, PAGE_CUR_RTREE_INSERT,
+				BTR_MODIFY_LEAF, &ins_cur, 0, &mtr);
 
 			/* It need to update MBR in parent entry,
 			so change search mode to BTR_MODIFY_TREE */
-			if (rtr_info.mbr_adj) {
+			if (error == DB_SUCCESS && rtr_info.mbr_adj) {
 				mtr_commit(&mtr);
 				rtr_clean_rtr_info(&rtr_info, true);
 				rtr_init_rtr_info(&rtr_info, false, &ins_cur,
@@ -171,18 +170,22 @@ public:
 				rtr_info_update_btr(&ins_cur, &rtr_info);
 				mtr_start(&mtr);
 				m_index->set_modified(mtr);
-				btr_cur_search_to_nth_level(
+				error = btr_cur_search_to_nth_level(
 					m_index, 0, dtuple,
 					PAGE_CUR_RTREE_INSERT,
 					BTR_MODIFY_TREE, &ins_cur, 0, &mtr);
 			}
 
-			error = btr_cur_optimistic_insert(
-				flag, &ins_cur, &ins_offsets, &row_heap,
-				dtuple, &rec, &big_rec, 0, NULL, &mtr);
+			if (error == DB_SUCCESS) {
+				error = btr_cur_optimistic_insert(
+					flag, &ins_cur, &ins_offsets,
+					&row_heap, dtuple, &rec, &big_rec,
+					0, NULL, &mtr);
+			}
+
+			ut_ad(!big_rec);
 
 			if (error == DB_FAIL) {
-				ut_ad(!big_rec);
 				mtr.commit();
 				mtr.start();
 				m_index->set_modified(mtr);
@@ -192,17 +195,21 @@ public:
 						  &ins_cur, m_index, false);
 
 				rtr_info_update_btr(&ins_cur, &rtr_info);
-				btr_cur_search_to_nth_level(
+				error = btr_cur_search_to_nth_level(
 					m_index, 0, dtuple,
 					PAGE_CUR_RTREE_INSERT,
 					BTR_MODIFY_TREE,
 					&ins_cur, 0, &mtr);
 
-				error = btr_cur_pessimistic_insert(
+				if (error == DB_SUCCESS) {
+					error = btr_cur_pessimistic_insert(
 						flag, &ins_cur, &ins_offsets,
 						&row_heap, dtuple, &rec,
 						&big_rec, 0, NULL, &mtr);
+				}
 			}
+
+			ut_ad(!big_rec);
 
 			DBUG_EXECUTE_IF(
 				"row_merge_ins_spatial_fail",

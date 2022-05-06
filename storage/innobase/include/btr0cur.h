@@ -142,6 +142,7 @@ btr_cur_optimistic_latch_leaves(
 	btr_cur_t*	cursor,
 	mtr_t*		mtr);
 
+MY_ATTRIBUTE((warn_unused_result))
 /********************************************************************//**
 Searches an index tree and positions a tree cursor on a given level.
 NOTE: n_fields_cmp in tuple must be set so that it cannot be compared

@@ -3078,11 +3078,14 @@ row_log_apply_op_low(
 	record. The operation may already have been performed,
 	depending on when the row in the clustered index was
 	scanned. */
-	btr_cur_search_to_nth_level(index, 0, entry, PAGE_CUR_LE,
-				    has_index_lock
-				    ? BTR_MODIFY_TREE
-				    : BTR_MODIFY_LEAF,
-				    &cursor, 0, &mtr);
+	*error = btr_cur_search_to_nth_level(index, 0, entry, PAGE_CUR_LE,
+					     has_index_lock
+					     ? BTR_MODIFY_TREE
+					     : BTR_MODIFY_LEAF,
+					     &cursor, 0, &mtr);
+	if (UNIV_UNLIKELY(*error != DB_SUCCESS)) {
+		goto func_exit;
+	}
 
 	ut_ad(dict_index_get_n_unique(index) > 0);
 	/* This test is somewhat similar to row_ins_must_modify_rec(),
@@ -3128,10 +3131,12 @@ row_log_apply_op_low(
 				mtr_commit(&mtr);
 				mtr_start(&mtr);
 				index->set_modified(mtr);
-				btr_cur_search_to_nth_level(
+				*error = btr_cur_search_to_nth_level(
 					index, 0, entry, PAGE_CUR_LE,
 					BTR_MODIFY_TREE, &cursor, 0, &mtr);
-
+				if (UNIV_UNLIKELY(*error != DB_SUCCESS)) {
+					goto func_exit;
+				}
 				/* No other thread than the current one
 				is allowed to modify the index tree.
 				Thus, the record should still exist. */
@@ -3230,9 +3235,12 @@ insert_the_rec:
 				mtr_commit(&mtr);
 				mtr_start(&mtr);
 				index->set_modified(mtr);
-				btr_cur_search_to_nth_level(
+				*error = btr_cur_search_to_nth_level(
 					index, 0, entry, PAGE_CUR_LE,
 					BTR_MODIFY_TREE, &cursor, 0, &mtr);
+				if (*error != DB_SUCCESS) {
+					break;
+				}
 			}
 
 			/* We already determined that the

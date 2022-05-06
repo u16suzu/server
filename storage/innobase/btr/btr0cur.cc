@@ -6174,18 +6174,23 @@ btr_estimate_n_rows_in_range_low(
 	example if "5 < x AND x <= 10" then we should not include the left
 	boundary, but should include the right one. */
 
-	mtr_start(&mtr);
+	mtr.start();
 
 	cursor.path_arr = path1;
 
-	bool	should_count_the_left_border;
+	bool should_count_the_left_border =
+		 dtuple_get_n_fields(tuple1->tuple) > 0;
 
-	if (dtuple_get_n_fields(tuple1->tuple) > 0) {
-
-              btr_cur_search_to_nth_level(index, 0, tuple1->tuple,
-                                            tuple1->mode,
-					    BTR_SEARCH_LEAF | BTR_ESTIMATE,
-					    &cursor, 0, &mtr);
+	if (should_count_the_left_border) {
+		if (btr_cur_search_to_nth_level(index, 0, tuple1->tuple,
+						tuple1->mode,
+						BTR_SEARCH_LEAF | BTR_ESTIMATE,
+						&cursor, 0, &mtr)
+		    != DB_SUCCESS) {
+corrupted:
+			mtr.commit();
+			return 0;
+		}
 
 		ut_ad(!page_rec_is_infimum(btr_cur_get_rec(&cursor)));
 
@@ -6198,19 +6203,11 @@ btr_estimate_n_rows_in_range_low(
 		should_count_the_left_border
 			= !page_rec_is_supremum(btr_cur_get_rec(&cursor));
 	} else {
-		dberr_t err = DB_SUCCESS;
-
-		err = btr_cur_open_at_index_side(true, index,
-					   BTR_SEARCH_LEAF | BTR_ESTIMATE,
-					   &cursor, 0, &mtr);
-
-		if (err != DB_SUCCESS) {
-			ib::warn() << " Error code: " << err
-				   << " btr_estimate_n_rows_in_range_low "
-				   << " called from file: "
-				   << __FILE__ << " line: " << __LINE__
-				   << " table: " << index->table->name
-				   << " index: " << index->name;
+		if (btr_cur_open_at_index_side(true, index,
+                                               BTR_SEARCH_LEAF | BTR_ESTIMATE,
+                                               &cursor, 0, &mtr)
+                    != DB_SUCCESS) {
+			goto corrupted;
 		}
 
 		ut_ad(page_rec_is_infimum(btr_cur_get_rec(&cursor)));
@@ -6219,29 +6216,27 @@ btr_estimate_n_rows_in_range_low(
 		'x < 123' or 'x <= 123' and btr_cur_open_at_index_side()
 		positioned the cursor on the infimum record on the leftmost
 		page, which must not be counted. */
-		should_count_the_left_border = false;
 	}
 
         tuple1->page_id= cursor.page_cur.block->page.id();
 
-	mtr_commit(&mtr);
+	mtr.commit();
 
-	if (!index->is_readable()) {
-		return 0;
-	}
-
-	mtr_start(&mtr);
+	mtr.start();
 
 	cursor.path_arr = path2;
 
-	bool	should_count_the_right_border;
+	bool should_count_the_right_border =
+		dtuple_get_n_fields(tuple2->tuple) > 0;
 
-	if (dtuple_get_n_fields(tuple2->tuple) > 0) {
-
-		btr_cur_search_to_nth_level(index, 0, tuple2->tuple,
-                                            mode2,
-					    BTR_SEARCH_LEAF | BTR_ESTIMATE,
-					    &cursor, 0, &mtr);
+	if (should_count_the_right_border) {
+		if (btr_cur_search_to_nth_level(index, 0, tuple2->tuple,
+						mode2,
+						BTR_SEARCH_LEAF | BTR_ESTIMATE,
+						&cursor, 0, &mtr)
+		    != DB_SUCCESS) {
+			goto corrupted;
+		}
 
 		const rec_t*	rec = btr_cur_get_rec(&cursor);
 
@@ -6270,19 +6265,11 @@ btr_estimate_n_rows_in_range_low(
 		the requested one (can also be positioned on the 'sup') and
 		we should not count the right border. */
 	} else {
-		dberr_t err = DB_SUCCESS;
-
-		err = btr_cur_open_at_index_side(false, index,
-					   BTR_SEARCH_LEAF | BTR_ESTIMATE,
-					   &cursor, 0, &mtr);
-
-		if (err != DB_SUCCESS) {
-			ib::warn() << " Error code: " << err
-				   << " btr_estimate_n_rows_in_range_low "
-				   << " called from file: "
-				   << __FILE__ << " line: " << __LINE__
-				   << " table: " << index->table->name
-				   << " index: " << index->name;
+		if (btr_cur_open_at_index_side(false, index,
+					       BTR_SEARCH_LEAF | BTR_ESTIMATE,
+					       &cursor, 0, &mtr)
+		    != DB_SUCCESS) {
+			goto corrupted;
 		}
 
 		ut_ad(page_rec_is_supremum(btr_cur_get_rec(&cursor)));
@@ -6291,12 +6278,11 @@ btr_estimate_n_rows_in_range_low(
 		'x > 123' or 'x >= 123' and btr_cur_open_at_index_side()
 		positioned the cursor on the supremum record on the rightmost
 		page, which must not be counted. */
-		should_count_the_right_border = false;
 	}
 
         tuple2->page_id= cursor.page_cur.block->page.id();
 
-	mtr_commit(&mtr);
+	mtr.commit();
 
 	/* We have the path information for the range in path1 and path2 */
 

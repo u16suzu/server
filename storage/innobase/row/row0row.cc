@@ -1296,10 +1296,10 @@ row_search_index_entry(
 
 	ut_ad(dtuple_check_typed(entry));
 
-	if (dict_index_is_spatial(index)) {
-		ut_ad(mode & (BTR_MODIFY_LEAF | BTR_MODIFY_TREE));
-		rtr_pcur_open(index, entry, PAGE_CUR_RTREE_LOCATE,
-			      mode, pcur, mtr);
+	if (index->is_spatial()) {
+		if (rtr_pcur_open(index, entry, mode, pcur, mtr)) {
+			return ROW_NOT_FOUND;
+		}
 	} else {
 		if (btr_pcur_open(index, entry, PAGE_CUR_LE, mode, pcur, mtr)
 		    != DB_SUCCESS) {

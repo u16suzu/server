@@ -649,6 +649,7 @@ btr_node_ptr_get_child(
 		mtr);
 }
 
+//FIXME: MY_ATTRIBUTE((nonnull(2,3,5), warn_unused_result))
 /************************************************************//**
 Returns the upper level node pointer to a page. It is assumed that mtr holds
 an sx-latch on the tree.
@@ -666,18 +667,11 @@ btr_page_get_father_node_ptr_func(
 				or BTR_CONT_SEARCH_TREE */
 	mtr_t*		mtr)	/*!< in: mtr */
 {
-	dtuple_t*	tuple;
-	rec_t*		user_rec;
-	rec_t*		node_ptr;
-	ulint		level;
-	ulint		page_no;
-	dict_index_t*	index;
-
 	ut_ad(latch_mode == BTR_CONT_MODIFY_TREE
 	      || latch_mode == BTR_CONT_SEARCH_TREE);
 
-	page_no = btr_cur_get_block(cursor)->page.id().page_no();
-	index = btr_cur_get_index(cursor);
+	const uint32_t page_no = btr_cur_get_block(cursor)->page.id().page_no();
+	dict_index_t* index = btr_cur_get_index(cursor);
 	ut_ad(!dict_index_is_spatial(index));
 
 	ut_ad(srv_read_only_mode
@@ -686,56 +680,27 @@ btr_page_get_father_node_ptr_func(
 
 	ut_ad(dict_index_get_page(index) != page_no);
 
-	level = btr_page_get_level(btr_cur_get_page(cursor));
+	const auto level = btr_page_get_level(btr_cur_get_page(cursor));
 
-	user_rec = btr_cur_get_rec(cursor);
+	const rec_t* user_rec = btr_cur_get_rec(cursor);
 	ut_a(page_rec_is_user_rec(user_rec));
 
-	tuple = dict_index_build_node_ptr(index, user_rec, 0, heap, level);
-	dberr_t err = btr_cur_search_to_nth_level(
-		index, level + 1, tuple,
-		PAGE_CUR_LE, latch_mode, cursor, 0, mtr);
-
-	if (err != DB_SUCCESS) {
-		ib::warn() << " Error code: " << err
-			<< " btr_page_get_father_node_ptr_func "
-			<< " level: " << level + 1
-			<< " table: " << index->table->name
-			<< " index: " << index->name();
+	if (btr_cur_search_to_nth_level(index, level + 1,
+					dict_index_build_node_ptr(index,
+								  user_rec, 0,
+								  heap, level),
+					PAGE_CUR_LE, latch_mode,
+					cursor, 0, mtr) != DB_SUCCESS) {
+		return nullptr;
 	}
 
-	node_ptr = btr_cur_get_rec(cursor);
+	const rec_t* node_ptr = btr_cur_get_rec(cursor);
 
 	offsets = rec_get_offsets(node_ptr, index, offsets, 0,
 				  ULINT_UNDEFINED, &heap);
 
 	if (btr_node_ptr_get_child_page_no(node_ptr, offsets) != page_no) {
-		rec_t*	print_rec;
-
-		ib::error()
-			<< "Corruption of an index tree: table "
-			<< index->table->name
-			<< " index " << index->name
-			<< ", father ptr page no "
-			<< btr_node_ptr_get_child_page_no(node_ptr, offsets)
-			<< ", child page no " << page_no;
-
-		print_rec = page_rec_get_next(
-			page_get_infimum_rec(page_align(user_rec)));
-		offsets = rec_get_offsets(print_rec, index, offsets,
-					  page_rec_is_leaf(user_rec)
-					  ? index->n_core_fields : 0,
-					  ULINT_UNDEFINED, &heap);
-		page_rec_print(print_rec, offsets);
-		offsets = rec_get_offsets(node_ptr, index, offsets, 0,
-					  ULINT_UNDEFINED, &heap);
-		page_rec_print(node_ptr, offsets);
-
-		ib::fatal()
-			<< "You should dump + drop + reimport the table to"
-			<< " fix the corruption. If the crash happens at"
-			<< " database startup. " << FORCE_RECOVERY_MSG
-			<< " Then dump + drop + reimport.";
+		offsets = nullptr;
 	}
 
 	return(offsets);
@@ -2287,7 +2252,6 @@ btr_insert_on_non_leaf_level(
 {
 	big_rec_t*	dummy_big_rec;
 	btr_cur_t	cursor;
-	dberr_t		err;
 	rec_t*		rec;
 	mem_heap_t*	heap = NULL;
 	rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
@@ -2296,62 +2260,55 @@ btr_insert_on_non_leaf_level(
 	rtr_info_t	rtr_info;
 
 	ut_ad(level > 0);
+	auto mode = PAGE_CUR_LE;
 
-	if (!dict_index_is_spatial(index)) {
-		dberr_t err = btr_cur_search_to_nth_level(
-			index, level, tuple, PAGE_CUR_LE,
-			BTR_CONT_MODIFY_TREE,
-			&cursor, 0, mtr);
-
-		if (err != DB_SUCCESS) {
-			ib::warn() << " Error code: " << err
-				   << " btr_page_get_father_node_ptr_func "
-				   << " level: " << level
-				   << " table: " << index->table->name
-				   << " index: " << index->name;
-		}
-	} else {
+	if (index->is_spatial()) {
+		mode = PAGE_CUR_RTREE_INSERT;
 		/* For spatial index, initialize structures to track
 		its parents etc. */
 		rtr_init_rtr_info(&rtr_info, false, &cursor, index, false);
 
 		rtr_info_update_btr(&cursor, &rtr_info);
-
-		btr_cur_search_to_nth_level(index, level, tuple,
-					    PAGE_CUR_RTREE_INSERT,
-					    BTR_CONT_MODIFY_TREE,
-					    &cursor, 0, mtr);
 	}
 
+	flags |= BTR_NO_LOCKING_FLAG | BTR_KEEP_SYS_FLAG
+		| BTR_NO_UNDO_LOG_FLAG;
+
+	dberr_t err = btr_cur_search_to_nth_level(index, level, tuple, mode,
+						  BTR_CONT_MODIFY_TREE,
+						  &cursor, 0, mtr);
 	ut_ad(cursor.flag == BTR_CUR_BINARY);
 
-	err = btr_cur_optimistic_insert(
-		flags
-		| BTR_NO_LOCKING_FLAG
-		| BTR_KEEP_SYS_FLAG
-		| BTR_NO_UNDO_LOG_FLAG,
-		&cursor, &offsets, &heap,
-		tuple, &rec, &dummy_big_rec, 0, NULL, mtr);
+	if (UNIV_LIKELY(err == DB_SUCCESS)) {
+		err = btr_cur_optimistic_insert(flags,
+						&cursor, &offsets, &heap,
+						tuple, &rec,
+						&dummy_big_rec, 0, NULL, mtr);
+	}
 
 	if (err == DB_FAIL) {
-		err = btr_cur_pessimistic_insert(flags
-						 | BTR_NO_LOCKING_FLAG
-						 | BTR_KEEP_SYS_FLAG
-						 | BTR_NO_UNDO_LOG_FLAG,
+		err = btr_cur_pessimistic_insert(flags,
 						 &cursor, &offsets, &heap,
 						 tuple, &rec,
 						 &dummy_big_rec, 0, NULL, mtr);
-		ut_a(err == DB_SUCCESS);
 	}
 
-	if (heap != NULL) {
+	if (UNIV_LIKELY_NULL(heap)) {
 		mem_heap_free(heap);
 	}
 
-	if (dict_index_is_spatial(index)) {
+	if (index->is_spatial()) {
 		ut_ad(cursor.rtr_info);
 
 		rtr_clean_rtr_info(&rtr_info, true);
+	}
+
+	if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
+		/* FIXME: invoke dict_set_corrupted() in the caller! */
+		index->type |= DICT_CORRUPT;
+		if (index->is_clust()) {
+			index->table->file_unreadable = true;
+		}
 	}
 }
 
@@ -2439,8 +2396,8 @@ btr_attach_half_pages(
 	/* Insert it next to the pointer to the lower half. Note that this
 	may generate recursion leading to a split on the higher level. */
 
-	btr_insert_on_non_leaf_level(flags, index, level + 1,
-				     node_ptr_upper, mtr);
+	btr_insert_on_non_leaf_level(flags, index, level + 1, node_ptr_upper,
+				     mtr);
 
 	/* Free the memory heap */
 	mem_heap_free(heap);

@@ -124,7 +124,8 @@ rtr_pcur_move_to_next(
 				function may release the page latch */
 	ulint		cur_level,
 				/*!< in: current level */
-	mtr_t*		mtr);	/*!< in: mtr */
+	mtr_t*		mtr)	/*!< in: mtr */
+	MY_ATTRIBUTE((warn_unused_result));
 
 /****************************************************************//**
 Searches the right position in rtree for a page cursor. */
@@ -303,21 +304,14 @@ rtr_store_parent_path(
 /**************************************************************//**
 Initializes and opens a persistent cursor to an index tree. It should be
 closed with btr_pcur_close. */
-void
+bool
 rtr_pcur_open(
 	dict_index_t*	index,	/*!< in: index */
 	const dtuple_t*	tuple,	/*!< in: tuple on which search done */
-	page_cur_mode_t	mode,	/*!< in: PAGE_CUR_L, ...;
-				NOTE that if the search is made using a unique
-				prefix of a record, mode should be
-				PAGE_CUR_LE, not PAGE_CUR_GE, as the latter
-				may end up on the previous page from the
-				record! */
 	ulint		latch_mode,/*!< in: BTR_SEARCH_LEAF, ... */
 	btr_pcur_t*	cursor,	/*!< in: memory buffer for persistent cursor */
-	mtr_t*		mtr);	/*!< in: mtr */
-
-struct btr_cur_t;
+	mtr_t*		mtr)	/*!< in: mtr */
+	MY_ATTRIBUTE((warn_unused_result));
 
 /*********************************************************//**
 Returns the R-Tree node stored in the parent search path

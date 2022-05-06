@@ -2834,7 +2834,7 @@ row_ins_sec_index_entry_low(
 
 	btr_cur_t	cursor;
 	ulint		search_mode	= mode;
-	dberr_t		err		= DB_SUCCESS;
+	dberr_t		err;
 	ulint		n_unique;
 	mtr_t		mtr;
 	rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
@@ -2881,7 +2881,8 @@ row_ins_sec_index_entry_low(
 			search_mode,
 			&cursor, 0, &mtr);
 
-		if (mode == BTR_MODIFY_LEAF && rtr_info.mbr_adj) {
+		if (err == DB_SUCCESS && mode == BTR_MODIFY_LEAF
+		    && rtr_info.mbr_adj) {
 			mtr_commit(&mtr);
 			rtr_clean_rtr_info(&rtr_info, true);
 			rtr_init_rtr_info(&rtr_info, false, &cursor,
@@ -2992,11 +2993,14 @@ row_ins_sec_index_entry_low(
 		prevent any insertion of a duplicate by another
 		transaction. Let us now reposition the cursor and
 		continue the insertion. */
-		btr_cur_search_to_nth_level(
+		err = btr_cur_search_to_nth_level(
 			index, 0, entry, PAGE_CUR_LE,
 			(search_mode
 			 & ~(BTR_INSERT | BTR_IGNORE_SEC_UNIQUE)),
 			&cursor, 0, &mtr);
+		if (err != DB_SUCCESS) {
+			goto func_exit;
+		}
 	}
 
 	if (row_ins_must_modify_rec(&cursor)) {
