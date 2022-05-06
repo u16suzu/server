@@ -5891,7 +5891,15 @@ add_all_virtual:
 	dberr_t err = btr_pcur_open_at_index_side(true, index, BTR_MODIFY_TREE,
 						  &pcur, true, 0, &mtr);
 	if (err != DB_SUCCESS) {
-		goto func_exit;
+func_exit:
+		mtr.commit();
+
+		if (err != DB_SUCCESS) {
+			my_error_innodb(err, table->s->table_name.str,
+					user_table->flags);
+			return true;
+		}
+		return false;
 	}
 	ut_ad(btr_pcur_is_before_first_on_page(&pcur));
 	btr_pcur_move_to_next_on_page(&pcur);
@@ -6031,16 +6039,7 @@ err_exit:
 		err = DB_CORRUPTION;
 	}
 
-func_exit:
-	mtr.commit();
-
-	if (err != DB_SUCCESS) {
-		my_error_innodb(err, table->s->table_name.str,
-				user_table->flags);
-		return true;
-	}
-
-	return false;
+	goto func_exit;
 }
 
 /** Adjust the create index column number from "New table" to

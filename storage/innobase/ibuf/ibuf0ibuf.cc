@@ -4067,7 +4067,6 @@ static MY_ATTRIBUTE((warn_unused_result, nonnull))
 bool ibuf_delete_rec(const page_id_t page_id, btr_pcur_t* pcur,
 		     const dtuple_t* search_tuple, mtr_t* mtr)
 {
-	page_t*		root;
 	dberr_t		err;
 
 	ut_ad(ibuf_inside(mtr));
@@ -4083,7 +4082,7 @@ bool ibuf_delete_rec(const page_id_t page_id, btr_pcur_t* pcur,
 			/* If a B-tree page is empty, it must be the root page
 			and the whole B-tree must be empty. InnoDB does not
 			allow empty B-tree pages other than the root. */
-			root = btr_pcur_get_page(pcur);
+			ut_d(const page_t* root = btr_pcur_get_page(pcur));
 
 			ut_ad(page_get_space_id(root) == IBUF_SPACE_ID);
 			ut_ad(page_get_page_no(root)
