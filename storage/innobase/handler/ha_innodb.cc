@@ -15281,25 +15281,13 @@ ha_innobase::check(
 			if (err != DB_SUCCESS) {
 				is_ok = false;
 
-				if (err == DB_DECRYPTION_FAILED) {
-					push_warning_printf(
-						thd,
-						Sql_condition::WARN_LEVEL_WARN,
-						ER_NO_SUCH_TABLE,
-						"Table %s is encrypted but encryption service or"
-						" used key_id is not available. "
-						" Can't continue checking table.",
-						index->table->name.m_name);
-				} else {
-					push_warning_printf(
-						thd,
-						Sql_condition::WARN_LEVEL_WARN,
-						ER_NOT_KEYFILE,
-						"InnoDB: The B-tree of"
-						" index %s is corrupted.",
-						index->name());
-				}
-
+				push_warning_printf(
+					thd,
+					Sql_condition::WARN_LEVEL_WARN,
+					ER_NOT_KEYFILE,
+					"InnoDB: The B-tree of"
+					" index %s is corrupted.",
+					index->name());
 				continue;
 			}
 		}

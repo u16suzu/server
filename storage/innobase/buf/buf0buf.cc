@@ -3588,21 +3588,8 @@ static dberr_t buf_page_check_corrupt(buf_page_t *bpage,
 		ib::error()
 			<< "The page " << bpage->id()
 			<< " in file '" << node.name
-			<< "' cannot be decrypted.";
-
-		ib::info()
-			<< "However key management plugin or used key_version "
-			<< key_version
-			<< " is not found or"
-			" used encryption algorithm or method does not match.";
-
-		if (bpage->id().space() != TRX_SYS_SPACE) {
-			ib::info()
-				<< "Marking tablespace as missing."
-				" You may drop this table or"
-				" install correct key management plugin"
-				" and key file.";
-		}
+			<< "' cannot be decrypted; key_version="
+			<< key_version;
 	}
 
 	return (err);

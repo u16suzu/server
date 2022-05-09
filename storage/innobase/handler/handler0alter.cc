@@ -8547,6 +8547,11 @@ oom:
 
 	switch (error) {
 		KEY*	dup_key;
+	default:
+		my_error_innodb(error,
+				table_share->table_name.str,
+				m_prebuilt->table->flags);
+		break;
 	all_done:
 	case DB_SUCCESS:
 		ut_d(dict_sys.freeze(SRW_LOCK_CALL));
@@ -8583,17 +8588,13 @@ oom:
 			 get_error_key_name(m_prebuilt->trx->error_key_num,
 					    ha_alter_info, m_prebuilt->table));
 		break;
-	case DB_DECRYPTION_FAILED: {
+	case DB_DECRYPTION_FAILED:
 		String str;
 		const char* engine= table_type();
 		get_error_message(HA_ERR_DECRYPTION_FAILED, &str);
-		my_error(ER_GET_ERRMSG, MYF(0), HA_ERR_DECRYPTION_FAILED, str.c_ptr(), engine);
+		my_error(ER_GET_ERRMSG, MYF(0), HA_ERR_DECRYPTION_FAILED,
+			 str.c_ptr(), engine);
 		break;
-	}
-	default:
-		my_error_innodb(error,
-				table_share->table_name.str,
-				m_prebuilt->table->flags);
 	}
 
 	/* prebuilt->table->n_ref_count can be anything here, given

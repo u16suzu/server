@@ -198,6 +198,17 @@ static bool btr_root_fseg_validate(ulint offset,
   return false;
 }
 
+/** Report a decryption failure. */
+ATTRIBUTE_COLD void btr_decryption_failed(const dict_index_t &index)
+{
+  ib_push_warning(static_cast<void*>(nullptr), DB_DECRYPTION_FAILED,
+                  "Table %s is encrypted but encryption service or"
+                  " used key_id is not available. "
+                  " Can't continue reading table.",
+                  index.table->name.m_name);
+  index.table->file_unreadable= true;
+}
+
 /** Get an index page and declare its latching order level.
 @param[in]	index	index tree
 @param[in]	page	page number
@@ -223,7 +234,7 @@ buf_block_t *btr_block_get(const dict_index_t &index,
       block= nullptr;
   }
   else if (err == DB_DECRYPTION_FAILED)
-    index.table->file_unreadable= true;
+    btr_decryption_failed(index);
 
   return block;
 }

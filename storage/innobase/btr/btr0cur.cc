@@ -1586,13 +1586,7 @@ retry_page_get:
 			/* change buffering */
 			break;
 		case DB_DECRYPTION_FAILED:
-			ib_push_warning(
-				static_cast<void*>(nullptr), err,
-				"Table %s is encrypted but encryption service or"
-				" used key_id is not available. "
-				" Can't continue reading table.",
-				index->table->name.m_name);
-			index->table->file_unreadable = true;
+			btr_decryption_failed(*index);
 			/* fall through */
 		default:
 			goto func_exit;
@@ -1699,14 +1693,7 @@ retry_page_get:
 
 			if (!get_block) {
 				if (err == DB_DECRYPTION_FAILED) {
-					ib_push_warning(
-						static_cast<void*>(nullptr),
-						err,
-						"Table %s is encrypted but encryption service or"
-						" used key_id is not available. "
-						" Can't continue reading table.",
-						index->table->name.m_name);
-					index->table->file_unreadable = true;
+					btr_decryption_failed(*index);
 				}
 
 				goto func_exit;
@@ -1729,13 +1716,7 @@ retry_page_get:
 
 		if (!block) {
 			if (err == DB_DECRYPTION_FAILED) {
-				ib_push_warning(
-					static_cast<void*>(nullptr), err,
-					"Table %s is encrypted but encryption service or"
-					" used key_id is not available. "
-					" Can't continue reading table.",
-					index->table->name.m_name);
-				index->table->file_unreadable = true;
+				btr_decryption_failed(*index);
 			}
 
 			goto func_exit;
@@ -2601,13 +2582,7 @@ btr_cur_open_at_index_side(
 
 		if (!block) {
 			if (err == DB_DECRYPTION_FAILED) {
-				ib_push_warning((void *)NULL,
-					DB_DECRYPTION_FAILED,
-					"Table %s is encrypted but encryption service or"
-					" used key_id is not available. "
-					" Can't continue reading table.",
-					index->table->name.m_name);
-				index->table->file_unreadable = true;
+				btr_decryption_failed(*index);
 			}
 
 			goto exit_loop;
@@ -2941,14 +2916,7 @@ btr_cur_open_at_rnd_pos(
 
 		if (!block) {
 			if (err == DB_DECRYPTION_FAILED) {
-				ib_push_warning(
-					static_cast<THD*>(nullptr),
-					DB_DECRYPTION_FAILED,
-					"Table %s is encrypted but encryption service or"
-					" used key_id is not available. "
-					" Can't continue reading table.",
-					index->table->name.m_name);
-				index->table->file_unreadable = true;
+				btr_decryption_failed(*index);
 			}
 
 			break;
@@ -6034,13 +6002,7 @@ btr_estimate_n_rows_in_range_on_level(
 
 		if (!block) {
 			if (err == DB_DECRYPTION_FAILED) {
-				ib_push_warning((void *)NULL,
-					DB_DECRYPTION_FAILED,
-					"Table %s is encrypted but encryption service or"
-					" used key_id is not available. "
-					" Can't continue reading table.",
-					index->table->name.m_name);
-				index->table->file_unreadable = true;
+				btr_decryption_failed(*index);
 			}
 
 			mtr_commit(&mtr);

@@ -1199,10 +1199,10 @@ row_mysql_get_table_status(
 			// to decrypt
 			if (push_warning) {
 				ib_push_warning(trx, DB_DECRYPTION_FAILED,
-					"Table %s in tablespace %lu encrypted."
+					"Table %s is encrypted."
 					"However key management plugin or used key_id is not found or"
 					" used encryption algorithm or method does not match.",
-					table->name.m_name, table->space);
+					table->name.m_name);
 			}
 
 			err = DB_DECRYPTION_FAILED;

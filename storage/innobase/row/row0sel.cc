@@ -4795,13 +4795,7 @@ wait_table_again:
 
 		if (err != DB_SUCCESS) {
 			if (err == DB_DECRYPTION_FAILED) {
-				ib_push_warning(trx->mysql_thd,
-					DB_DECRYPTION_FAILED,
-					"Table %s is encrypted but encryption service or"
-					" used key_id is not available. "
-					" Can't continue reading table.",
-					prebuilt->table->name.m_name);
-				index->table->file_unreadable = true;
+				btr_decryption_failed(*index);
 			}
 			rec = NULL;
 			goto page_read_error;

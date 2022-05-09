@@ -181,6 +181,9 @@ btr_root_adjust_on_import(
 	const dict_index_t*	index)	/*!< in: index tree */
 	MY_ATTRIBUTE((warn_unused_result));
 
+/** Report a decryption failure. */
+ATTRIBUTE_COLD void btr_decryption_failed(const dict_index_t &index);
+
 /** Get an index page and declare its latching order level.
 @param[in]	index	index tree
 @param[in]	page	page number
