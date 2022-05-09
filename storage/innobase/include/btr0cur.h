@@ -65,7 +65,6 @@ enum {
 
 /* btr_cur_latch_leaves() returns latched blocks and savepoints. */
 struct btr_latch_leaves_t {
-	/* left block, target block and right block */
 	buf_block_t*	blocks[3];
 	ulint		savepoints[3];
 };
@@ -700,14 +699,15 @@ btr_rec_copy_externally_stored_field(
 @param[in]	block		leaf page where the search converged
 @param[in]	latch_mode	BTR_SEARCH_LEAF, ...
 @param[in]	cursor		cursor
-@param[in]	mtr		mini-transaction
-@return	blocks and savepoints which actually latched. */
-btr_latch_leaves_t
+@param[in,out]	mtr		mini-transaction
+@param[out]	latch_leaves	latched blocks and savepoints */
+void
 btr_cur_latch_leaves(
 	buf_block_t*		block,
 	ulint			latch_mode,
 	btr_cur_t*		cursor,
-	mtr_t*			mtr);
+	mtr_t*			mtr,
+	btr_latch_leaves_t*	latch_leaves = nullptr);
 
 /*######################################################################*/
 
