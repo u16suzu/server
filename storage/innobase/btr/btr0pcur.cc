@@ -473,7 +473,7 @@ Moves the persistent cursor to the first record on the next page. Releases the
 latch on the current page, and bufferunfixes it. Note that there must not be
 modifications on the current page, as then the x-latch can be released only in
 mtr_commit. */
-void
+dberr_t
 btr_pcur_move_to_next_page(
 /*=======================*/
 	btr_pcur_t*	cursor,	/*!< in: persistent cursor; must be on the
@@ -487,11 +487,6 @@ btr_pcur_move_to_next_page(
 	cursor->old_stored = false;
 
 	const page_t* page = btr_pcur_get_page(cursor);
-
-	if (UNIV_UNLIKELY(!page)) {
-		return;
-	}
-
 	const uint32_t next_page_no = btr_page_get_next(page);
 
 	ut_ad(next_page_no != FIL_NULL);
@@ -505,12 +500,13 @@ btr_pcur_move_to_next_page(
 		mode = BTR_MODIFY_LEAF;
 	}
 
+	dberr_t err;
 	buf_block_t* next_block = btr_block_get(
 		*btr_pcur_get_btr_cur(cursor)->index, next_page_no, mode,
-		page_is_leaf(page), mtr);
+		page_is_leaf(page), mtr, &err);
 
 	if (UNIV_UNLIKELY(!next_block)) {
-		return;
+		return err;
 	}
 
 	const page_t* next_page = buf_block_get_frame(next_block);
@@ -525,6 +521,7 @@ btr_pcur_move_to_next_page(
 	page_cur_set_before_first(next_block, btr_pcur_get_page_cur(cursor));
 
 	ut_d(page_check_dir(next_page));
+	return err;
 }
 
 /*********************************************************//**

@@ -201,11 +201,10 @@ btr_pcur_move_to_next_user_rec(
 	cursor->old_stored = false;
 loop:
 	if (btr_pcur_is_after_last_on_page(cursor)) {
-		if (btr_pcur_is_after_last_in_tree(cursor)) {
+		if (btr_pcur_is_after_last_in_tree(cursor)
+		    || btr_pcur_move_to_next_page(cursor, mtr) != DB_SUCCESS) {
 			return(FALSE);
 		}
-
-		btr_pcur_move_to_next_page(cursor, mtr);
 	} else {
 		btr_pcur_move_to_next_on_page(cursor);
 	}
@@ -236,15 +235,13 @@ btr_pcur_move_to_next(
 	cursor->old_stored = false;
 
 	if (btr_pcur_is_after_last_on_page(cursor)) {
-		if (btr_pcur_is_after_last_in_tree(cursor)) {
+		if (btr_pcur_is_after_last_in_tree(cursor)
+		    || btr_pcur_move_to_next_page(cursor, mtr) != DB_SUCCESS) {
 			return(FALSE);
 		}
-
-		btr_pcur_move_to_next_page(cursor, mtr);
-		return(TRUE);
+	} else {
+		btr_pcur_move_to_next_on_page(cursor);
 	}
-
-	btr_pcur_move_to_next_on_page(cursor);
 	return(TRUE);
 }
 

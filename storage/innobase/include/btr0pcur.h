@@ -279,12 +279,13 @@ Moves the persistent cursor to the first record on the next page.
 Releases the latch on the current page, and bufferunfixes it.
 Note that there must not be modifications on the current page,
 as then the x-latch can be released only in mtr_commit. */
-void
+dberr_t
 btr_pcur_move_to_next_page(
 /*=======================*/
 	btr_pcur_t*	cursor,	/*!< in: persistent cursor; must be on the
 				last record of the current page */
-	mtr_t*		mtr);	/*!< in: mtr */
+	mtr_t*		mtr)	/*!< in: mtr */
+	MY_ATTRIBUTE((nonnull, warn_unused_result));
 
 #define btr_pcur_get_btr_cur(cursor) (&(cursor)->btr_cur)
 #define btr_pcur_get_page_cur(cursor) (&(cursor)->btr_cur.page_cur)

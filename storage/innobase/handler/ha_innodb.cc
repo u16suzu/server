@@ -2294,6 +2294,7 @@ convert_error_code_to_mysql(
 						code should be introduced */
 
 	case DB_CORRUPTION:
+	case DB_PAGE_CORRUPTED:
 		return(HA_ERR_CRASHED);
 
 	case DB_OUT_OF_FILE_SPACE:

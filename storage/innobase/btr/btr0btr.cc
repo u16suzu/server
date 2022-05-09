@@ -215,17 +215,20 @@ ATTRIBUTE_COLD void btr_decryption_failed(const dict_index_t &index)
 @param[in]	mode	latch mode
 @param[in]	merge	whether change buffer merge should be attempted
 @param[in,out]	mtr	mini-transaction
+@param[out]	err	error code
 @return block */
 buf_block_t *btr_block_get(const dict_index_t &index,
                            uint32_t page, ulint mode, bool merge,
-                           mtr_t *mtr)
+                           mtr_t *mtr, dberr_t *err)
 {
-  dberr_t err;
+  dberr_t local_err;
+  if (!err)
+    err= &local_err;
   buf_block_t *block=
     buf_page_get_gen(page_id_t{index.table->space->id, page},
                      index.table->space->zip_size(), mode, nullptr, BUF_GET,
-                     mtr, &err, merge && !index.is_clust());
-  ut_ad(!block == (err != DB_SUCCESS));
+                     mtr, err, merge && !index.is_clust());
+  ut_ad(!block == (*err != DB_SUCCESS));
 
   if (UNIV_LIKELY(block != nullptr))
   {
@@ -233,7 +236,7 @@ buf_block_t *btr_block_get(const dict_index_t &index,
         btr_page_get_index_id(block->page.frame) != index.id)
       block= nullptr;
   }
-  else if (err == DB_DECRYPTION_FAILED)
+  else if (*err == DB_DECRYPTION_FAILED)
     btr_decryption_failed(index);
 
   return block;

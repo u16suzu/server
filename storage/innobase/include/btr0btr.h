@@ -190,10 +190,11 @@ ATTRIBUTE_COLD void btr_decryption_failed(const dict_index_t &index);
 @param[in]	mode	latch mode
 @param[in]	merge	whether change buffer merge should be attempted
 @param[in,out]	mtr	mini-transaction
+@param[out]	err	error code
 @return block */
 buf_block_t *btr_block_get(const dict_index_t &index,
                            uint32_t page, ulint mode, bool merge,
-                           mtr_t *mtr);
+                           mtr_t *mtr, dberr_t *err= nullptr);
 
 /**************************************************************//**
 Gets the index id field of a page.

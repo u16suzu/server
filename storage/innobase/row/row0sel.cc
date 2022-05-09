@@ -5761,9 +5761,7 @@ next_rec:
 				goto rec_loop;
 			}
 		} else {
-			const buf_block_t* block = btr_pcur_get_block(pcur);
-			/* This is based on btr_pcur_move_to_next(),
-			but avoids infinite read loop of a corrupted page. */
+			/* This is based on btr_pcur_move_to_next() */
 			ut_ad(pcur->pos_state == BTR_PCUR_IS_POSITIONED);
 			ut_ad(pcur->latch_mode != BTR_NO_LATCHES);
 			pcur->old_stored = false;
@@ -5771,10 +5769,8 @@ next_rec:
 				if (btr_pcur_is_after_last_in_tree(pcur)) {
 					goto not_moved;
 				}
-				btr_pcur_move_to_next_page(pcur, &mtr);
-				if (UNIV_UNLIKELY(btr_pcur_get_block(pcur)
-						  == block)) {
-					err = DB_CORRUPTION;
+				err = btr_pcur_move_to_next_page(pcur, &mtr);
+				if (err != DB_SUCCESS) {
 					goto lock_wait_or_error;
 				}
 			} else {
