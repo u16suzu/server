@@ -2769,16 +2769,16 @@ func_exit:
 
 /** Report information about an invalid page access. */
 ATTRIBUTE_COLD
-static void fil_invalid_page_access_msg(bool fatal, const char *name,
+static void fil_invalid_page_access_msg(const char *name,
                                         os_offset_t offset, ulint len,
                                         bool is_read)
 {
-  sql_print_error("%s%s %zu bytes at " UINT64PF
+  sql_print_error("%s %zu bytes at " UINT64PF
                   " outside the bounds of the file: %s",
-                  fatal ? "[FATAL] InnoDB: " : "InnoDB: ",
-                  is_read ? "Trying to read" : "Trying to write",
-                  len, offset, name);
-  if (fatal)
+                  is_read
+                  ? "InnoDB: Trying to read"
+                  : "[FATAL] InnoDB: Trying to write", len, offset, name);
+  if (!is_read)
     abort();
 }
 
@@ -2834,7 +2834,6 @@ fil_io_t fil_space_t::io(const IORequest &type, os_offset_t offset, size_t len,
 	}
 
 	ulint p = static_cast<ulint>(offset >> srv_page_size_shift);
-	bool fatal;
 
 	if (UNIV_LIKELY_NULL(UT_LIST_GET_NEXT(chain, node))) {
 		ut_ad(this == fil_system.sys_space
@@ -2845,12 +2844,11 @@ fil_io_t fil_space_t::io(const IORequest &type, os_offset_t offset, size_t len,
 			p -= node->size;
 			node = UT_LIST_GET_NEXT(chain, node);
 			if (!node) {
+fail:
 				release();
 				if (type.type != IORequest::READ_ASYNC) {
-					fatal = true;
-fail:
 					fil_invalid_page_access_msg(
-						fatal, node->name,
+						node->name,
 						offset, len,
 						type.is_read());
 				}
@@ -2862,16 +2860,6 @@ fail:
 	}
 
 	if (UNIV_UNLIKELY(node->size <= p)) {
-		release();
-
-		if (type.type == IORequest::READ_ASYNC) {
-			/* If we can tolerate the non-existent pages, we
-			should return with DB_ERROR and let caller decide
-			what to do. */
-			return {DB_ERROR, nullptr};
-		}
-
-		fatal = node->space->purpose != FIL_TYPE_IMPORT;
 		goto fail;
 	}
 
