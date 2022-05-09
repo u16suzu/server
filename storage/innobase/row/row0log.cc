@@ -405,9 +405,6 @@ start_log:
 			    buf, byte_offset, srv_sort_buf_size)
 		    != DB_SUCCESS) {
 write_failed:
-			/* We set the flag directly instead of invoking
-			dict_set_corrupted_index_cache_only(index) here,
-			because the index is not "public" yet. */
 			index->type |= DICT_CORRUPT;
 		}
 
@@ -3711,9 +3708,6 @@ func_exit:
 		}
 		/* fall through */
 	default:
-		/* We set the flag directly instead of invoking
-		dict_set_corrupted_index_cache_only(index) here,
-		because the index is not "public" yet. */
 		index->type |= DICT_CORRUPT;
 	}
 
@@ -3767,9 +3761,6 @@ row_log_apply(
 
 	if (error != DB_SUCCESS) {
 		ut_ad(index->table->space);
-		/* We set the flag directly instead of invoking
-		dict_set_corrupted_index_cache_only(index) here,
-		because the index is not "public" yet. */
 		index->type |= DICT_CORRUPT;
 		index->table->drop_aborted = TRUE;
 

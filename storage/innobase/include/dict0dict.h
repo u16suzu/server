@@ -1691,23 +1691,6 @@ and in the system table SYS_INDEXES.
 void dict_set_corrupted(dict_index_t *index, const char *ctx, bool dict_locked)
   ATTRIBUTE_COLD __attribute__((nonnull));
 
-/** Flags an index corrupted in the data dictionary cache only. This
-is used mostly to mark a corrupted index when index's own dictionary
-is corrupted, and we force to load such index for repair purpose
-@param[in,out]	index	index that is corrupted */
-void
-dict_set_corrupted_index_cache_only(
-	dict_index_t*	index);
-
-/**********************************************************************//**
-Flags a table with specified space_id corrupted in the table dictionary
-cache.
-@return TRUE if successful */
-bool dict_set_corrupted_by_space(const fil_space_t* space);
-
-/** Flag a table encrypted in the data dictionary cache. */
-void dict_set_encrypted_by_space(const fil_space_t* space);
-
 /** Sets merge_threshold in the SYS_INDEXES
 @param[in,out]	index		index
 @param[in]	merge_threshold	value to set */

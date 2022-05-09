@@ -4102,76 +4102,6 @@ dict_print_info_on_foreign_keys(
 	return str;
 }
 
-/** Given a space_id of a file-per-table tablespace, search the
-dict_sys.table_LRU list and return the dict_table_t* pointer for it.
-@param	space	tablespace
-@return table if found, NULL if not */
-static
-dict_table_t*
-dict_find_single_table_by_space(const fil_space_t* space)
-{
-	dict_table_t*	table;
-	ulint		num_item;
-	ulint		count = 0;
-
-	ut_ad(space->id > 0);
-
-	if (!dict_sys.is_initialised()) {
-		/* This could happen when it's in redo processing. */
-		return(NULL);
-	}
-
-	table = UT_LIST_GET_FIRST(dict_sys.table_LRU);
-	num_item =  UT_LIST_GET_LEN(dict_sys.table_LRU);
-
-	/* This function intentionally does not acquire mutex as it is used
-	by error handling code in deep call stack as last means to avoid
-	killing the server, so it worth to risk some consequences for
-	the action. */
-	while (table && count < num_item) {
-		if (table->space == space) {
-			if (dict_table_is_file_per_table(table)) {
-				return(table);
-			}
-			return(NULL);
-		}
-
-		table = UT_LIST_GET_NEXT(table_LRU, table);
-		count++;
-	}
-
-	return(NULL);
-}
-
-/**********************************************************************//**
-Flags a table with specified space_id corrupted in the data dictionary
-cache
-@return true if successful */
-bool dict_set_corrupted_by_space(const fil_space_t* space)
-{
-	dict_table_t*   table;
-
-	table = dict_find_single_table_by_space(space);
-
-	if (!table) {
-		return false;
-	}
-
-	/* mark the table->corrupted bit only, since the caller
-	could be too deep in the stack for SYS_INDEXES update */
-	table->corrupted = true;
-	table->file_unreadable = true;
-	return true;
-}
-
-/** Flag a table encrypted in the data dictionary cache. */
-void dict_set_encrypted_by_space(const fil_space_t* space)
-{
-	if (dict_table_t* table = dict_find_single_table_by_space(space)) {
-		table->file_unreadable = true;
-	}
-}
-
 /**********************************************************************//**
 Flags an index corrupted both in the data dictionary cache
 and in the SYS_INDEXES */
@@ -4268,30 +4198,6 @@ func_exit:
 	if (!dict_locked) {
 		dict_sys.unlock();
 	}
-}
-
-/** Flags an index corrupted in the data dictionary cache only. This
-is used mostly to mark a corrupted index when index's own dictionary
-is corrupted, and we force to load such index for repair purpose
-@param[in,out]	index	index which is corrupted */
-void
-dict_set_corrupted_index_cache_only(
-	dict_index_t*	index)
-{
-	ut_ad(index != NULL);
-	ut_ad(index->table != NULL);
-	ut_ad(dict_sys.locked());
-	ut_ad(!dict_table_is_comp(dict_sys.sys_tables));
-	ut_ad(!dict_table_is_comp(dict_sys.sys_indexes));
-
-	/* Mark the table as corrupted only if the clustered index
-	is corrupted */
-	if (dict_index_is_clust(index)) {
-		index->table->corrupted = TRUE;
-		index->table->file_unreadable = true;
-	}
-
-	index->type |= DICT_CORRUPT;
 }
 
 /** Sets merge_threshold in the SYS_INDEXES

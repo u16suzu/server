@@ -2409,6 +2409,7 @@ buf_zip_decompress(
 	case FIL_PAGE_RTREE:
 		if (page_zip_decompress(&block->page.zip,
 					block->page.frame, TRUE)) {
+func_exit:
 			if (space) {
 				space->release();
 			}
@@ -2428,11 +2429,7 @@ buf_zip_decompress(
 	case FIL_PAGE_TYPE_ZBLOB2:
 		/* Copy to uncompressed storage. */
 		memcpy(block->page.frame, frame, block->zip_size());
-		if (space) {
-			space->release();
-		}
-
-		return(TRUE);
+		goto func_exit;
 	}
 
 	ib::error() << "Unknown compressed page type "
@@ -2447,12 +2444,6 @@ err_exit:
 	}
 
 	if (space) {
-		if (encrypted) {
-			dict_set_encrypted_by_space(space);
-		} else {
-			dict_set_corrupted_by_space(space);
-		}
-
 		space->release();
 	}
 
@@ -2603,62 +2594,15 @@ loop:
 	checksum cannot be decypted. */
 
 	if (dberr_t local_err = buf_read_page(page_id, zip_size)) {
-		if (mode == BUF_GET_POSSIBLY_FREED) {
-			if (err) {
-				*err = local_err;
-			}
-			return nullptr;
-		} else if (retries < BUF_PAGE_READ_MAX_RETRIES) {
-			++retries;
+		if (mode != BUF_GET_POSSIBLY_FREED
+                    && retries++ < BUF_PAGE_READ_MAX_RETRIES) {
 			DBUG_EXECUTE_IF("innodb_page_corruption_retries",
 					retries = BUF_PAGE_READ_MAX_RETRIES;);
 		} else {
 			if (err) {
 				*err = local_err;
 			}
-			/* Pages whose encryption key is unavailable or the
-			configured key, encryption algorithm or encryption
-			method are incorrect are marked as encrypted in
-			buf_page_check_corrupt(). Unencrypted page could be
-			corrupted in a way where the key_id field is
-			nonzero. There is no checksum on field
-			FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION. */
-			switch (local_err) {
-			case DB_PAGE_CORRUPTED:
-				if (!srv_force_recovery) {
-					break;
-				}
-				/* fall through */
-			case DB_DECRYPTION_FAILED:
-				return nullptr;
-			default:
-				break;
-			}
-
-			/* Try to set table as corrupted instead of
-			asserting. */
-			if (page_id.space() == TRX_SYS_SPACE) {
-			} else if (page_id.space() == SRV_TMP_SPACE_ID) {
-			} else if (fil_space_t* space
-				   = fil_space_t::get(page_id.space())) {
-				bool set = dict_set_corrupted_by_space(space);
-				space->release();
-				if (set) {
-					return nullptr;
-				}
-			}
-
-			if (local_err == DB_IO_ERROR) {
-				return nullptr;
-			}
-
-			ib::fatal() << "Unable to read page " << page_id
-				    << " into the buffer pool after "
-				    << BUF_PAGE_READ_MAX_RETRIES
-				    << ". The most probable cause"
-				" of this error may be that the"
-				" table has been corrupted."
-				" See https://mariadb.com/kb/en/library/innodb-recovery-modes/";
+			return nullptr;
 		}
 	} else {
 		buf_read_ahead_random(page_id, zip_size, ibuf_inside(mtr));
@@ -2701,24 +2645,7 @@ ignore_block:
 				*err = DB_PAGE_CORRUPTED;
 			}
 
-			if (page_id.space() == TRX_SYS_SPACE) {
-			} else if (page_id.space() == SRV_TMP_SPACE_ID) {
-			} else if (fil_space_t* space =
-				   fil_space_t::get(page_id.space())) {
-				bool set = dict_set_corrupted_by_space(space);
-				space->release();
-				if (set) {
-					return nullptr;
-				}
-			}
-
-			ib::fatal() << "Unable to read page " << page_id
-				    << " into the buffer pool after "
-				    << BUF_PAGE_READ_MAX_RETRIES
-				    << ". The most probable cause"
-				" of this error may be that the"
-				" table has been corrupted."
-				" See https://mariadb.com/kb/en/library/innodb-recovery-modes/";
+			return nullptr;
 		}
 	} else if (mode != BUF_PEEK_IF_IN_POOL) {
         } else if (!mtr) {
@@ -3482,37 +3409,6 @@ ATTRIBUTE_COLD void buf_page_monitor(const buf_page_t &bpage, bool read)
 	MONITOR_INC_NOCHECK(counter);
 }
 
-/** Mark a table corrupted.
-@param[in]	bpage	corrupted page
-@param[in]	space	tablespace of the corrupted page */
-ATTRIBUTE_COLD
-static void buf_mark_space_corrupt(buf_page_t* bpage, const fil_space_t& space)
-{
-	/* If block is not encrypted find the table with specified
-	space id, and mark it corrupted. Encrypted tables
-	are marked unusable later e.g. in ::open(). */
-	if (!space.crypt_data
-	    || space.crypt_data->type == CRYPT_SCHEME_UNENCRYPTED) {
-		dict_set_corrupted_by_space(&space);
-	} else {
-		dict_set_encrypted_by_space(&space);
-	}
-}
-
-/** Mark a table corrupted.
-@param[in]	bpage	Corrupted page
-@param[in]	node	data file
-Also remove the bpage from LRU list. */
-ATTRIBUTE_COLD
-static void buf_corrupt_page_release(buf_page_t *bpage, const fil_node_t &node)
-{
-  ut_ad(bpage->id().space() == node.space->id);
-  buf_pool.corrupted_evict(bpage);
-
-  if (!srv_force_recovery)
-    buf_mark_space_corrupt(bpage, *node.space);
-}
-
 /** Check if the encrypted page is corrupted for the full crc32 format.
 @param[in]	space_id	page belongs to space id
 @param[in]	d		page
@@ -3667,7 +3563,7 @@ database_corrupted:
     DBUG_EXECUTE_IF("buf_page_import_corrupt_failure",
                     if (!is_predefined_tablespace(id().space()))
                     {
-                      buf_corrupt_page_release(this, node);
+                      buf_pool.corrupted_evict(this);
                       ib::info() << "Simulated IMPORT corruption";
                       return err;
                     }
@@ -3697,7 +3593,7 @@ database_corrupted:
       intentionally crash the server. */
       if (expected_id.space() == TRX_SYS_SPACE)
         ib::fatal() << "Aborting because of a corrupt database page.";
-      buf_corrupt_page_release(this, node);
+      buf_pool.corrupted_evict(this);
       return err;
     }
   }
@@ -3708,7 +3604,7 @@ database_corrupted:
   if (err == DB_PAGE_CORRUPTED || err == DB_DECRYPTION_FAILED)
   {
 release_page:
-    buf_corrupt_page_release(this, node);
+    buf_pool.corrupted_evict(this);
     if (recv_recovery_is_on())
       recv_sys.free_corrupted_page(expected_id);
     return err;

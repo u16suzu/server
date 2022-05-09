@@ -4357,9 +4357,13 @@ row_search_mvcc(
 	if (!prebuilt->table->space) {
 		DBUG_RETURN(DB_TABLESPACE_DELETED);
 	} else if (!prebuilt->table->is_readable()) {
-		DBUG_RETURN(prebuilt->table->space
-			    ? DB_DECRYPTION_FAILED
-			    : DB_TABLESPACE_NOT_FOUND);
+		if (fil_space_crypt_t* crypt_data =
+		    prebuilt->table->space->crypt_data) {
+			if (crypt_data->should_encrypt()) {
+				DBUG_RETURN(DB_DECRYPTION_FAILED);
+			}
+		}
+		DBUG_RETURN(DB_CORRUPTION);
 	} else if (!prebuilt->index_usable) {
 		DBUG_RETURN(DB_MISSING_HISTORY);
 	} else if (prebuilt->index->is_corrupted()) {

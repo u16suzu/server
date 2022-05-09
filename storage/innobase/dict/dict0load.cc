@@ -2040,7 +2040,11 @@ corrupted:
 			dictionary cache for such metadata corruption,
 			since we would always be able to set it
 			when loading the dictionary cache */
-			dict_set_corrupted_index_cache_only(index);
+			if (index->is_clust()) {
+				index->table->corrupted = true;
+				index->table->file_unreadable = true;
+			}
+			index->type |= DICT_CORRUPT;
 		} else if (!dict_index_is_clust(index)
 			   && NULL == dict_table_get_first_index(table)) {
 
