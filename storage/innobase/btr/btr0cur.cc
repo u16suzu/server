@@ -5784,8 +5784,12 @@ discard_page:
 				index, next_rec, block->page.id().page_no(),
 				heap, level);
 
-			btr_insert_on_non_leaf_level(
+			*err = btr_insert_on_non_leaf_level(
 				flags, index, level + 1, node_ptr, mtr);
+			if (*err != DB_SUCCESS) {
+				ret = FALSE;
+				goto err_exit;
+			}
 
 			ut_d(parent_latched = true);
 		}

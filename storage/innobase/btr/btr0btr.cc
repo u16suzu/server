@@ -2258,7 +2258,7 @@ btr_page_insert_fits(
 /*******************************************************//**
 Inserts a data tuple to a tree on a non-leaf level. It is assumed
 that mtr holds an x-latch on the tree. */
-void
+dberr_t
 btr_insert_on_non_leaf_level(
 	ulint		flags,	/*!< in: undo logging and locking flags */
 	dict_index_t*	index,	/*!< in: index */
@@ -2319,20 +2319,15 @@ btr_insert_on_non_leaf_level(
 		rtr_clean_rtr_info(&rtr_info, true);
 	}
 
-	if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
-		/* FIXME: invoke dict_set_corrupted() in the caller! */
-		index->type |= DICT_CORRUPT;
-		if (index->is_clust()) {
-			index->table->file_unreadable = true;
-		}
-	}
+	return err;
 }
 
+MY_ATTRIBUTE((nonnull,warn_unused_result))
 /**************************************************************//**
 Attaches the halves of an index page on the appropriate level in an
 index tree. */
-static MY_ATTRIBUTE((nonnull))
-void
+static
+dberr_t
 btr_attach_half_pages(
 /*==================*/
 	ulint		flags,		/*!< in: undo logging and
@@ -2412,11 +2407,15 @@ btr_attach_half_pages(
 	/* Insert it next to the pointer to the lower half. Note that this
 	may generate recursion leading to a split on the higher level. */
 
-	btr_insert_on_non_leaf_level(flags, index, level + 1, node_ptr_upper,
-				     mtr);
+	dberr_t err = btr_insert_on_non_leaf_level(
+		flags, index, level + 1, node_ptr_upper, mtr);
 
 	/* Free the memory heap */
 	mem_heap_free(heap);
+
+	if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
+		return err;
+	}
 
 	/* Update page links of the level */
 
@@ -2456,6 +2455,8 @@ btr_attach_half_pages(
 
 	btr_page_set_prev(upper_block, lower_block->page.id().page_no(), mtr);
 	btr_page_set_next(lower_block, upper_block->page.id().page_no(), mtr);
+
+	return DB_SUCCESS;
 }
 
 /*************************************************************//**
@@ -2593,7 +2594,9 @@ btr_insert_into_right_sibling(
 		&err, TRUE, &next_father_cursor,
 		BTR_CREATE_FLAG, false, mtr);
 
-	ut_a(err == DB_SUCCESS);
+	if (err != DB_SUCCESS) {
+		return nullptr;
+	}
 
 	if (!compressed) {
 		btr_cur_compress_if_useful(&next_father_cursor, FALSE, mtr);
@@ -2603,8 +2606,10 @@ btr_insert_into_right_sibling(
 		cursor->index, rec, next_block->page.id().page_no(),
 		heap, level);
 
-	btr_insert_on_non_leaf_level(
-		flags, cursor->index, level + 1, node_ptr, mtr);
+	if (btr_insert_on_non_leaf_level(flags, cursor->index, level + 1,
+					 node_ptr, mtr) != DB_SUCCESS) {
+		return nullptr;
+	}
 
 	ut_ad(rec_offs_validate(rec, cursor->index, *offsets));
 
@@ -2806,8 +2811,12 @@ insert_empty:
 	/* 4. Do first the modifications in the tree structure */
 
 	/* FIXME: write FIL_PAGE_PREV,FIL_PAGE_NEXT in new_block earlier! */
-	btr_attach_half_pages(flags, cursor->index, block,
-			      first_rec, new_block, direction, mtr);
+	*err = btr_attach_half_pages(flags, cursor->index, block,
+				     first_rec, new_block, direction, mtr);
+
+	if (UNIV_UNLIKELY(*err != DB_SUCCESS)) {
+		return nullptr;
+	}
 
 	/* If the split is made on the leaf level and the insert will fit
 	on the appropriate half-page, we may release the tree x-latch.

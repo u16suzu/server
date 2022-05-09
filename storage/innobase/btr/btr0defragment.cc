@@ -431,8 +431,12 @@ btr_defragment_merge_pages(
 			node_ptr = dict_index_build_node_ptr(
 				index, rec, page_get_page_no(from_page),
 				heap, level);
-			btr_insert_on_non_leaf_level(0, index, level+1,
-						     node_ptr, mtr);
+			if (btr_insert_on_non_leaf_level(0, index, level+1,
+                                                         node_ptr, mtr)
+                            != DB_SUCCESS) {
+				dict_set_corrupted(index, "defragment", false);
+                                return nullptr;
+                        }
 		}
 		to_block = from_block;
 	}
