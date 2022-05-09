@@ -721,6 +721,7 @@ static const rec_t* rtr_get_father_node(
 				rec = nullptr;
 			} else {
 				ut_ad(btr_cur->low_match == n_fields);
+				rec = btr_cur_get_rec(btr_cur);
 			}
 		}
 	}
