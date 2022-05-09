@@ -65,7 +65,6 @@ struct fil_addr_t;
 #define BUF_GET_POSSIBLY_FREED		16
 					/*!< Like BUF_GET, but do not mind
 					if the file page has been freed. */
-#define BUF_EVICT_IF_IN_POOL	20	/*!< evict a clean block if found */
 /* @} */
 
 /** If LRU list of a buf_pool is less than this size then LRU eviction
@@ -210,7 +209,7 @@ buf_page_t *buf_page_get_zip(const page_id_t page_id, ulint zip_size);
 @param[in]	guess			guessed block or NULL
 @param[in]	mode			BUF_GET, BUF_GET_IF_IN_POOL,
 BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
-@param[in]	mtr			mini-transaction
+@param[in,out]	mtr			mini-transaction
 @param[out]	err			DB_SUCCESS or error code
 @param[in]	allow_ibuf_merge	Allow change buffer merge while
 reading the pages from file.
@@ -224,7 +223,8 @@ buf_page_get_gen(
 	ulint			mode,
 	mtr_t*			mtr,
 	dberr_t*		err = NULL,
-	bool			allow_ibuf_merge = false);
+	bool			allow_ibuf_merge = false)
+	MY_ATTRIBUTE((nonnull(6), warn_unused_result));
 
 /** This is the low level function used to get access to a database page.
 @param[in]	page_id			page id
@@ -233,7 +233,8 @@ buf_page_get_gen(
 @param[in]	guess			guessed block or NULL
 @param[in]	mode			BUF_GET, BUF_GET_IF_IN_POOL,
 BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
-@param[in]	mtr			mini-transaction
+@param[in,out]	mtr			mini-transaction, or NULL if a
+					block with page_id is to be evicted
 @param[out]	err			DB_SUCCESS or error code
 @param[in]	allow_ibuf_merge	Allow change buffer merge to happen
 while reading the page from file

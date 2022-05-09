@@ -2077,14 +2077,17 @@ dict_stats_analyze_index_below_cur(
 
 	/* descend to the leaf level on the B-tree */
 	for (;;) {
-
-		dberr_t err = DB_SUCCESS;
+		dberr_t err;
 
 		block = buf_page_get_gen(page_id, zip_size,
 					 RW_S_LATCH, NULL, BUF_GET,
 					 &mtr, &err,
 					 !index->is_clust()
 					 && 1 == btr_page_get_level(page));
+		if (!block) {
+			goto func_exit;
+		}
+
 		// FIXME: check for null
 		page = buf_block_get_frame(block);
 
@@ -2150,6 +2153,7 @@ dict_stats_analyze_index_below_cur(
 		     __func__, page_no, n_diff);
 #endif
 
+func_exit:
 	mtr_commit(&mtr);
 	mem_heap_free(heap);
 }

@@ -1249,16 +1249,17 @@ search_again:
 		page_id_t(index->table->space_id, page_no),
 		zip_size, RW_X_LATCH, NULL, BUF_GET, mtr);
 
-	ut_ad(block);
+	if (!block) {
+		ret = false;
+		goto func_exit;
+	}
 
 	/* Get the page SSN */
 	page = buf_block_get_frame(block);
 	page_ssn = page_get_ssn_id(page);
 
-	ulint low_match = page_cur_search(
-				block, index, tuple, PAGE_CUR_LE, page_cursor);
-
-	if (low_match == r_cursor->old_n_fields) {
+	if (page_cur_search(block, index, tuple, PAGE_CUR_LE, page_cursor)
+	    == r_cursor->old_n_fields) {
 		const rec_t*	rec;
 		const rec_offs*	offsets1;
 		const rec_offs*	offsets2;
@@ -1294,6 +1295,7 @@ search_again:
 		goto search_again;
 	}
 
+func_exit:
 	mem_heap_free(heap);
 
 	return(ret);

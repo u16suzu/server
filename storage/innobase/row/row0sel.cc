@@ -1201,13 +1201,13 @@ re_scan:
 
 			/* MDEV-14059 FIXME: why re-latch the block?
 			pcur is already positioned on it! */
-			uint32_t page_no = page_get_page_no(
-				btr_pcur_get_page(pcur));
-
 			cur_block = buf_page_get_gen(
-				page_id_t(index->table->space_id, page_no),
-				index->table->space->zip_size(),
+				btr_pcur_get_block(pcur)->page.id(),
+				btr_pcur_get_block(pcur)->zip_size(),
 				RW_X_LATCH, NULL, BUF_GET, mtr, &err);
+			if (!cur_block) {
+				goto func_end;
+			}
 		} else {
 			mtr->start();
 			goto func_end;

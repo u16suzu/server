@@ -2488,8 +2488,8 @@ buf_page_get_low(
 	unsigned	access_time;
 	ulint		retries = 0;
 
-	ut_ad((mtr == NULL) == (mode == BUF_EVICT_IF_IN_POOL));
 	ut_ad(!mtr || mtr->is_active());
+	ut_ad(mtr || mode == BUF_PEEK_IF_IN_POOL);
 	ut_ad((rw_latch == RW_S_LATCH)
 	      || (rw_latch == RW_X_LATCH)
 	      || (rw_latch == RW_SX_LATCH)
@@ -2506,12 +2506,6 @@ buf_page_get_low(
 
 #ifdef UNIV_DEBUG
 	switch (mode) {
-	case BUF_EVICT_IF_IN_POOL:
-		/* After DISCARD TABLESPACE, the tablespace would not exist,
-		but in IMPORT TABLESPACE, PageConverter::operator() must
-		replace any old pages, which were not evicted during DISCARD.
-		Skip the assertion on zip_size. */
-		break;
 	case BUF_PEEK_IF_IN_POOL:
 	case BUF_GET_IF_IN_POOL:
 		/* The caller may pass a dummy page size,
@@ -2580,7 +2574,6 @@ loop:
 	switch (mode) {
 	case BUF_GET_IF_IN_POOL:
 	case BUF_PEEK_IF_IN_POOL:
-	case BUF_EVICT_IF_IN_POOL:
 		return nullptr;
 	case BUF_GET_IF_IN_POOL_OR_WATCH:
 		/* We cannot easily use a memory transaction here. */
@@ -2680,8 +2673,7 @@ got_block:
 	ut_ad(state > buf_page_t::FREED);
 
 	if (state > buf_page_t::READ_FIX && state < buf_page_t::WRITE_FIX) {
-		if (mode == BUF_PEEK_IF_IN_POOL
-		    || mode == BUF_EVICT_IF_IN_POOL) {
+		if (mode == BUF_PEEK_IF_IN_POOL) {
 ignore_block:
 			block->unfix();
 			return nullptr;
@@ -2728,24 +2720,23 @@ ignore_block:
 				" table has been corrupted."
 				" See https://mariadb.com/kb/en/library/innodb-recovery-modes/";
 		}
-	} else if (mode == BUF_PEEK_IF_IN_POOL) {
-		if (UNIV_UNLIKELY(!block->page.frame)) {
-			/* This mode is only used for dropping an
-			adaptive hash index. There cannot be an
-			adaptive hash index for a compressed-only page. */
-			goto ignore_block;
-		}
-	} else if (mode == BUF_EVICT_IF_IN_POOL) {
+	} else if (mode != BUF_PEEK_IF_IN_POOL) {
+        } else if (!mtr) {
 		ut_ad(!block->page.oldest_modification());
 		mysql_mutex_lock(&buf_pool.mutex);
 		block->unfix();
 
-		if (!buf_LRU_free_page(&block->page, true)) {
+			if (!buf_LRU_free_page(&block->page, true)) {
 			ut_ad(0);
 		}
 
 		mysql_mutex_unlock(&buf_pool.mutex);
 		return nullptr;
+	} else if (UNIV_UNLIKELY(!block->page.frame)) {
+		/* This mode is only used for dropping an
+		adaptive hash index. There cannot be an
+		adaptive hash index for a compressed-only page. */
+		goto ignore_block;
 	}
 
 	ut_ad(mode == BUF_GET_IF_IN_POOL || mode == BUF_PEEK_IF_IN_POOL
@@ -2985,7 +2976,7 @@ get_latch:
 @param[in]	guess			guessed block or NULL
 @param[in]	mode			BUF_GET, BUF_GET_IF_IN_POOL,
 BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
-@param[in]	mtr			mini-transaction
+@param[in,out]	mtr			mini-transaction, or NULL
 @param[out]	err			DB_SUCCESS or error code
 @param[in]	allow_ibuf_merge	Allow change buffer merge while
 reading the pages from file.

@@ -779,9 +779,6 @@ btr_cur_optimistic_latch_leaves(
 				mtr, &err);
 
 			if (!cursor->left_block) {
-				// FIXME: is this too harsh if only
-				// a secondary index is corrupted?
-				cursor->index->table->file_unreadable = true;
 			} else if (cursor->left_block->page.is_freed()
 				   || btr_page_get_next(
 					   cursor->left_block->page.frame)
@@ -792,7 +789,7 @@ btr_cur_optimistic_latch_leaves(
 				return false;
 			}
 		} else {
-			cursor->left_block = NULL;
+			cursor->left_block = nullptr;
 		}
 
 		if (buf_page_optimistic_get(mode, block, modify_clock, mtr)) {
@@ -814,10 +811,8 @@ btr_cur_optimistic_latch_leaves(
 		}
 
 		ut_ad(block->page.buf_fix_count());
-		/* release the left block */
-		if (cursor->left_block != NULL) {
-			btr_leaf_page_release(cursor->left_block,
-					      mode, mtr);
+		if (cursor->left_block) {
+			btr_leaf_page_release(cursor->left_block, mode, mtr);
 		}
 	}
 
@@ -1585,25 +1580,24 @@ retry_page_get:
 				 height == 0 && !index->is_clust());
 	tree_blocks[n_blocks] = block;
 
-	/* Note that block==NULL signifies either an error or change
-	buffering. */
-
-	if (err != DB_SUCCESS) {
-		ut_ad(!block);
-		if (err == DB_DECRYPTION_FAILED) {
-			ib_push_warning((void *)NULL,
-				DB_DECRYPTION_FAILED,
+	if (!block) {
+		switch (err) {
+		case DB_SUCCESS:
+			/* change buffering */
+			break;
+		case DB_DECRYPTION_FAILED:
+			ib_push_warning(
+				static_cast<void*>(nullptr), err,
 				"Table %s is encrypted but encryption service or"
 				" used key_id is not available. "
 				" Can't continue reading table.",
 				index->table->name.m_name);
 			index->table->file_unreadable = true;
+			/* fall through */
+		default:
+			goto func_exit;
 		}
 
-		goto func_exit;
-	}
-
-	if (block == NULL) {
 		/* This must be a search to perform an insert/delete
 		mark/ delete; try using the insert/delete buffer */
 
@@ -1705,8 +1699,9 @@ retry_page_get:
 
 			if (!get_block) {
 				if (err == DB_DECRYPTION_FAILED) {
-					ib_push_warning((void *)NULL,
-						DB_DECRYPTION_FAILED,
+					ib_push_warning(
+						static_cast<void*>(nullptr),
+						err,
 						"Table %s is encrypted but encryption service or"
 						" used key_id is not available. "
 						" Can't continue reading table.",
@@ -1734,8 +1729,8 @@ retry_page_get:
 
 		if (!block) {
 			if (err == DB_DECRYPTION_FAILED) {
-				ib_push_warning((void *)NULL,
-					DB_DECRYPTION_FAILED,
+				ib_push_warning(
+					static_cast<void*>(nullptr), err,
 					"Table %s is encrypted but encryption service or"
 					" used key_id is not available. "
 					" Can't continue reading table.",
@@ -5220,8 +5215,8 @@ btr_cur_pessimistic_update(
 					 cursor, offsets, offsets_heap,
 					 new_entry, &rec,
 					 &dummy_big_rec, n_ext, NULL, mtr);
-	ut_a(rec);
 	ut_a(err == DB_SUCCESS);
+	ut_a(rec);
 	ut_a(dummy_big_rec == NULL);
 	ut_ad(rec_offs_validate(rec, cursor->index, *offsets));
 	page_cursor->rec = rec;
@@ -6972,8 +6967,8 @@ btr_store_big_rec_extern_fields(
 			index->set_modified(mtr);
 			mtr.set_log_mode(btr_mtr->get_log_mode());
 
-			buf_page_get(rec_block->page.id(),
-				     rec_block->zip_size(), RW_X_LATCH, &mtr);
+			rec_block->page.fix();
+			mtr.page_lock(rec_block, RW_X_LATCH);
 
 			uint32_t hint_prev = prev_page_no;
 			if (hint_prev == FIL_NULL) {

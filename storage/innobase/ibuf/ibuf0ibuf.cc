@@ -2288,13 +2288,17 @@ tablespace_deleted:
 		if (UNIV_LIKELY(page_nos[i] < size)) {
 			mtr.start();
 			dberr_t err;
+			buf_block_t *b =
 			buf_page_get_gen(page_id_t(space_id, page_nos[i]),
 					 zip_size, RW_X_LATCH, nullptr,
 					 BUF_GET_POSSIBLY_FREED,
 					 &mtr, &err, true);
 			mtr.commit();
-			if (err == DB_TABLESPACE_DELETED) {
+			if (b) {
+			} else if (err == DB_TABLESPACE_DELETED) {
 				goto tablespace_deleted;
+			} else {
+				continue;
 			}
 		}
 #ifndef DBUG_OFF

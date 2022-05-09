@@ -857,38 +857,16 @@ PageBulk::release()
 }
 
 /** Start mtr and latch the block */
-dberr_t
-PageBulk::latch()
+void PageBulk::latch()
 {
-	m_mtr.start();
-	m_index->set_modified(m_mtr);
+  m_mtr.start();
+  m_index->set_modified(m_mtr);
 
-	ut_ad(m_block->page.buf_fix_count());
+  m_mtr.page_lock(m_block, RW_X_LATCH);
 
-	/* In case the block is U-latched by page_cleaner. */
-	if (!buf_page_optimistic_get(RW_X_LATCH, m_block, m_modify_clock,
-				     &m_mtr)) {
-		/* FIXME: avoid another lookup */
-		m_block = buf_page_get_gen(page_id_t(m_index->table->space_id,
-						     m_page_no),
-					   0, RW_X_LATCH,
-					   m_block, BUF_GET_IF_IN_POOL,
-					   &m_mtr, &m_err);
-
-		if (m_err != DB_SUCCESS) {
-			return (m_err);
-		}
-
-		ut_ad(m_block != NULL);
-	}
-
-	ut_d(const auto buf_fix_count =) m_block->page.unfix();
-
-	ut_ad(buf_fix_count);
-	ut_ad(m_cur_rec > m_page);
-	ut_ad(m_cur_rec < m_heap_top);
-
-	return (m_err);
+  ut_ad(m_block->page.buf_fix_count());
+  ut_ad(m_cur_rec > m_page);
+  ut_ad(m_cur_rec < m_heap_top);
 }
 
 /** Split a page
