@@ -5817,7 +5817,11 @@ discard_page:
 			so that it is equal to the new leftmost node pointer
 			on the page */
 			btr_cur_t cursor;
-			btr_page_get_father(index, block, mtr, &cursor);
+			ret = btr_page_get_father(index, block, mtr, &cursor);
+			if (!ret) {
+				*err = DB_CORRUPTION;
+				goto err_exit;
+			}
 			btr_cur_node_ptr_delete(&cursor, mtr);
 			const ulint	level = btr_page_get_level(page);
 			// FIXME: reuse the node_ptr from above
@@ -5832,7 +5836,7 @@ discard_page:
 		}
 	}
 
-	/* SPATIAL INDEX never use SX locks; we can allow page merges
+	/* SPATIAL INDEX never use U locks; we can allow page merges
 	while holding X lock on the spatial index tree.
 	Do not allow merges of non-leaf B-tree pages unless it is
 	safe to do so. */
@@ -5873,7 +5877,7 @@ discard_page:
 
 return_after_reservations:
 	*err = DB_SUCCESS;
-
+err_exit:
 	mem_heap_free(heap);
 
 	if (!srv_read_only_mode

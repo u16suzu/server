@@ -396,7 +396,9 @@ btr_defragment_merge_pages(
 		}
 	}
 	btr_cur_t parent;
-	if (n_recs_to_move == n_recs) {
+	if (!btr_page_get_father(index, from_block, mtr, &parent)) {
+		to_block = nullptr;
+	} else if (n_recs_to_move == n_recs) {
 		/* The whole page is merged with the previous page,
 		free it. */
 		const page_id_t from{from_block->page.id()};
@@ -404,7 +406,6 @@ btr_defragment_merge_pages(
 		btr_search_drop_page_hash_index(from_block);
 		ut_a(DB_SUCCESS == btr_level_list_remove(*from_block, *index,
 							 mtr));
-		btr_page_get_father(index, from_block, mtr, &parent);
 		btr_cur_node_ptr_delete(&parent, mtr);
 		/* btr_blob_dbg_remove(from_page, index,
 		"btr_defragment_n_pages"); */
@@ -424,7 +425,6 @@ btr_defragment_merge_pages(
 						    orig_pred,
 						    from_block);
 			// FIXME: reuse the node_ptr!
-			btr_page_get_father(index, from_block, mtr, &parent);
 			btr_cur_node_ptr_delete(&parent, mtr);
 			rec = page_rec_get_next(
 				page_get_infimum_rec(from_page));

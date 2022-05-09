@@ -616,12 +616,13 @@ rtr_pcur_open(
 /* Get the rtree page father.
 @param[in]	index		rtree index
 @param[in]	block		child page in the index
-@param[in]	mtr		mtr
+@param[in,out]	mtr		mtr
 @param[in]	sea_cur		search cursor, contains information
 				about parent nodes in search
-@param[in]	cursor		cursor on node pointer record,
-				its page x-latched */
-void
+@param[out]	cursor		cursor on node pointer record,
+				its page x-latched
+@return whether the cursor was successfully positioned */
+bool
 rtr_page_get_father(
 	dict_index_t*	index,
 	buf_block_t*	block,
@@ -629,23 +630,11 @@ rtr_page_get_father(
 	btr_cur_t*	sea_cur,
 	btr_cur_t*	cursor)
 {
-	mem_heap_t*	heap = mem_heap_create(100);
-#ifdef UNIV_DEBUG
-	rec_offs*	offsets;
-
-	offsets = rtr_page_get_father_block(
-		NULL, heap, index, block, mtr, sea_cur, cursor);
-
-	ulint	page_no = btr_node_ptr_get_child_page_no(cursor->page_cur.rec,
-							 offsets);
-
-	ut_ad(page_no == block->page.id().page_no());
-#else
-	rtr_page_get_father_block(
-		NULL, heap, index, block, mtr, sea_cur, cursor);
-#endif
-
-	mem_heap_free(heap);
+  mem_heap_t *heap = mem_heap_create(100);
+  rec_offs *offsets= rtr_page_get_father_block(nullptr, heap, index, block,
+                                               mtr, sea_cur, cursor);
+  mem_heap_free(heap);
+  return offsets != nullptr;
 }
 
 MY_ATTRIBUTE((warn_unused_result))
@@ -675,7 +664,7 @@ static const rec_t* rtr_get_father_node(
 		if (rtr_cur_restore_position(BTR_CONT_MODIFY_TREE, sea_cur,
 					     level, mtr)) {
 			btr_pcur_t*	r_cursor = rtr_get_parent_cursor(
-						sea_cur, level, false);
+				sea_cur, level, false);
 
 			rec = btr_pcur_get_rec(r_cursor);
 

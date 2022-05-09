@@ -649,7 +649,7 @@ btr_node_ptr_get_child(
 		mtr);
 }
 
-//FIXME: MY_ATTRIBUTE((nonnull(2,3,5), warn_unused_result))
+MY_ATTRIBUTE((nonnull(2,3,5), warn_unused_result))
 /************************************************************//**
 Returns the upper level node pointer to a page. It is assumed that mtr holds
 an sx-latch on the tree.
@@ -741,8 +741,9 @@ btr_page_get_father_block(
 @param[in,out]	index	b-tree
 @param[in]	block	child page
 @param[in,out]	mtr	mini-transaction
-@param[out]	cursor	cursor pointing to the x-latched parent page */
-void btr_page_get_father(dict_index_t* index, buf_block_t* block, mtr_t* mtr,
+@param[out]	cursor	cursor pointing to the x-latched parent page
+@return whether the cursor was successfully positioned */
+bool btr_page_get_father(dict_index_t* index, buf_block_t* block, mtr_t* mtr,
 			 btr_cur_t* cursor)
 {
 	mem_heap_t*	heap;
@@ -752,8 +753,9 @@ void btr_page_get_father(dict_index_t* index, buf_block_t* block, mtr_t* mtr,
 	btr_cur_position(index, rec, block, cursor);
 
 	heap = mem_heap_create(100);
-	btr_page_get_father_node_ptr(NULL, heap, cursor, mtr);
+	const bool got = btr_page_get_father_node_ptr(NULL, heap, cursor, mtr);
 	mem_heap_free(heap);
+	return got;
 }
 
 #ifdef UNIV_DEBUG
@@ -2510,27 +2512,28 @@ btr_insert_into_right_sibling(
 	if (next_page_no == FIL_NULL || !page_rec_is_supremum(
 			page_rec_get_next(btr_cur_get_rec(cursor)))) {
 
-		return(NULL);
+		return nullptr;
 	}
 
 	page_cur_t	next_page_cursor;
 	buf_block_t*	next_block;
 	page_t*		next_page;
 	btr_cur_t	next_father_cursor;
-	rec_t*		rec = NULL;
+	rec_t*		rec = nullptr;
 	ulint		max_size;
 
 	next_block = btr_block_get(*cursor->index, next_page_no, RW_X_LATCH,
 				   page_is_leaf(page), mtr);
 	if (UNIV_UNLIKELY(!next_block)) {
-		return NULL;
+		return nullptr;
 	}
 	next_page = buf_block_get_frame(next_block);
+	const bool is_leaf = page_is_leaf(next_page);
 
-	bool	is_leaf = page_is_leaf(next_page);
-
-	btr_page_get_father(
-		cursor->index, next_block, mtr, &next_father_cursor);
+	if (!btr_page_get_father(cursor->index, next_block, mtr,
+				 &next_father_cursor)) {
+		return nullptr;
+	}
 
 	page_cur_search(
 		next_block, cursor->index, tuple, PAGE_CUR_LE,
@@ -2547,7 +2550,7 @@ btr_insert_into_right_sibling(
 		&next_page_cursor, tuple, cursor->index, offsets, &heap,
 		n_ext, mtr);
 
-	if (rec == NULL) {
+	if (!rec) {
 		if (is_leaf
 		    && next_block->page.zip.ssize
 		    && !dict_index_is_clust(cursor->index)
@@ -2557,7 +2560,7 @@ btr_insert_into_right_sibling(
 			reorganize before failing. */
 			ibuf_reset_free_bits(next_block);
 		}
-		return(NULL);
+		return nullptr;
 	}
 
 	ibool	compressed;
@@ -3520,8 +3523,9 @@ retry:
 			necessary in recursive page merge. */
 			cursor2.rtr_info = cursor->rtr_info;
 			cursor2.tree_height = cursor->tree_height;
-		} else {
-			btr_page_get_father(index, merge_block, mtr, &cursor2);
+		} else if (!btr_page_get_father(index, merge_block, mtr,
+						&cursor2)) {
+			goto err_exit;
 		}
 
 		if (merge_page_zip && left_page_no == FIL_NULL) {
@@ -3780,12 +3784,17 @@ btr_discard_only_page_on_level(
 		ut_ad(mtr->memo_contains_flagged(block, MTR_MEMO_PAGE_X_FIX));
 		btr_search_drop_page_hash_index(block);
 
-		if (dict_index_is_spatial(index)) {
+		if (index->is_spatial()) {
 			/* Check any concurrent search having this page */
 			rtr_check_discard_page(index, NULL, block);
-			rtr_page_get_father(index, block, mtr, NULL, &cursor);
+			if (!rtr_page_get_father(index, block, mtr, nullptr,
+						 &cursor)) {
+				return;
+			}
 		} else {
-			btr_page_get_father(index, block, mtr, &cursor);
+			if (!btr_page_get_father(index, block, mtr, &cursor)) {
+				return;
+			}
 		}
 		father = btr_cur_get_block(&cursor);
 
@@ -3880,10 +3889,10 @@ btr_discard_page(
 
 	MONITOR_INC(MONITOR_INDEX_DISCARD);
 
-	if (dict_index_is_spatial(index)) {
-		rtr_page_get_father(index, block, mtr, cursor, &parent_cursor);
-	} else {
-		btr_page_get_father(index, block, mtr, &parent_cursor);
+	if (index->is_spatial()
+	    ? !rtr_page_get_father(index, block, mtr, cursor, &parent_cursor)
+	    : !btr_page_get_father(index, block, mtr, &parent_cursor)) {
+		return;
 	}
 
 	/* Decide the page which will inherit the locks */
