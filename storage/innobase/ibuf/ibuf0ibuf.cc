@@ -2975,9 +2975,8 @@ func_exit:
 
 	ut_ad(page_validate(btr_pcur_get_page(&pcur), ibuf.index));
 
-	btr_pcur_move_to_prev(&pcur, &mtr);
-
-	if (btr_pcur_is_before_first_on_page(&pcur)) {
+	if (!btr_pcur_move_to_prev(&pcur, &mtr)
+	    || btr_pcur_is_before_first_on_page(&pcur)) {
 		goto func_exit;
 	}
 

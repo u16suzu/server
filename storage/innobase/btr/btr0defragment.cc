@@ -674,16 +674,18 @@ processed:
 		mtr_start(&mtr);
 		dict_index_t *index = item->pcur->btr_cur.index;
 		index->set_modified(mtr);
-		/* To follow the latching order defined in WL#6326, acquire index->lock X-latch.
-		This entitles us to acquire page latches in any order for the index. */
+		/* To follow the latching order defined in WL#6326,
+		acquire index->lock X-latch.  This entitles us to
+		acquire page latches in any order for the index. */
 		mtr_x_lock_index(index, &mtr);
-		/* This will acquire index->lock SX-latch, which per WL#6363 is allowed
+		/* This will acquire index->lock U latch, which is allowed
 		when we are already holding the X-latch. */
-		item->pcur->restore_position(BTR_MODIFY_TREE, &mtr);
-		buf_block_t* first_block = btr_pcur_get_block(item->pcur);
 		if (buf_block_t *last_block =
-		    btr_defragment_n_pages(first_block, index,
-					   srv_defragment_n_pages,
+		    item->pcur->restore_position(BTR_MODIFY_TREE, &mtr)
+		    == btr_pcur_t::CORRUPTED
+		    ? nullptr
+		    : btr_defragment_n_pages(btr_pcur_get_block(item->pcur),
+					   index, srv_defragment_n_pages,
 					   &mtr)) {
 			/* If we haven't reached the end of the index,
 			place the cursor on the last record of last page,

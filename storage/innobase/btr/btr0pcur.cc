@@ -299,21 +299,14 @@ btr_pcur_t::restore_position(ulint restore_latch_mode, mtr_t *mtr)
 	if (UNIV_UNLIKELY
 	    (rel_pos == BTR_PCUR_AFTER_LAST_IN_TREE
 	     || rel_pos == BTR_PCUR_BEFORE_FIRST_IN_TREE)) {
-		dberr_t err = DB_SUCCESS;
-
 		/* In these cases we do not try an optimistic restoration,
 		but always do a search */
 
-		err = btr_cur_open_at_index_side(
+		if (btr_cur_open_at_index_side(
 			rel_pos == BTR_PCUR_BEFORE_FIRST_IN_TREE,
 			index, restore_latch_mode,
-			&btr_cur, 0, mtr);
-
-		if (err != DB_SUCCESS) {
-			ib::warn() << " Error code: " << err
-				   << " btr_pcur_t::restore_position "
-				   << " table: " << index->table->name
-				   << " index: " << index->name;
+			&btr_cur, 0, mtr) != DB_SUCCESS) {
+			return restore_status::CORRUPTED;
 		}
 
 		latch_mode =
@@ -416,12 +409,16 @@ btr_pcur_t::restore_position(ulint restore_latch_mode, mtr_t *mtr)
 		mode = PAGE_CUR_UNSUPP;
 	}
 
-	btr_pcur_open_with_no_init_func(index, tuple, mode, restore_latch_mode,
-					this,
+	if (btr_pcur_open_with_no_init_func(
+		index, tuple, mode, restore_latch_mode,
+		this,
 #ifdef BTR_CUR_HASH_ADAPT
-					NULL,
+		nullptr,
 #endif /* BTR_CUR_HASH_ADAPT */
-					mtr);
+		mtr) != DB_SUCCESS) {
+		mem_heap_free(heap);
+		return restore_status::CORRUPTED;
+        }
 
 	/* Restore the old search mode */
 	search_mode = old_mode;
@@ -524,6 +521,7 @@ btr_pcur_move_to_next_page(
 	return err;
 }
 
+MY_ATTRIBUTE((nonnull,warn_unused_result))
 /*********************************************************//**
 Moves the persistent cursor backward if it is on the first record of the page.
 Commits mtr. Note that to prevent a possible deadlock, the operation
@@ -534,7 +532,7 @@ return, but it may happen that the cursor is not positioned on the last
 record of any page, because the structure of the tree may have changed
 during the time when the cursor had no latches. */
 static
-void
+bool
 btr_pcur_move_backward_from_page(
 /*=============================*/
 	btr_pcur_t*	cursor,	/*!< in: persistent cursor, must be on the first
@@ -557,7 +555,10 @@ btr_pcur_move_backward_from_page(
 	static_assert(BTR_SEARCH_PREV == (64 | BTR_SEARCH_LEAF), "");
 	static_assert(BTR_MODIFY_PREV == (64 | BTR_MODIFY_LEAF), "");
 
-	cursor->restore_position(64 | latch_mode, mtr);
+	if (UNIV_UNLIKELY(cursor->restore_position(64 | latch_mode, mtr)
+			  == btr_pcur_t::CORRUPTED)) {
+		return true;
+	}
 
 	buf_block_t* prev_block = btr_pcur_get_btr_cur(cursor)->left_block;
 
@@ -579,13 +580,14 @@ btr_pcur_move_backward_from_page(
 
 	cursor->latch_mode = latch_mode;
 	cursor->old_stored = false;
+	return false;
 }
 
 /*********************************************************//**
 Moves the persistent cursor to the previous record in the tree. If no records
 are left, the cursor stays 'before first in tree'.
 @return TRUE if the cursor was not before first in tree */
-ibool
+bool
 btr_pcur_move_to_prev(
 /*==================*/
 	btr_pcur_t*	cursor,	/*!< in: persistent cursor; NOTE that the
@@ -598,18 +600,13 @@ btr_pcur_move_to_prev(
 	cursor->old_stored = false;
 
 	if (btr_pcur_is_before_first_on_page(cursor)) {
-
-		if (btr_pcur_is_before_first_in_tree(cursor)) {
-
-			return(FALSE);
+		if (btr_pcur_is_before_first_in_tree(cursor)
+		    || btr_pcur_move_backward_from_page(cursor, mtr)) {
+			return false;
 		}
-
-		btr_pcur_move_backward_from_page(cursor, mtr);
-
-		return(TRUE);
+	} else {
+		btr_pcur_move_to_prev_on_page(cursor);
 	}
 
-	btr_pcur_move_to_prev_on_page(cursor);
-
-	return(TRUE);
+	return true;
 }

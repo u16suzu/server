@@ -230,17 +230,12 @@ dict_getnext_system(
 					to the record */
 	mtr_t*		mtr)		/*!< in: the mini-transaction */
 {
-	const rec_t*	rec;
-
-	/* Restore the position */
-	pcur->restore_position(BTR_SEARCH_LEAF, mtr);
-
-	/* Get the next record */
-	do {
-		rec = dict_getnext_system_low(pcur, mtr);
-	} while (rec && rec_get_deleted_flag(rec, 0));
-
-	return(rec);
+  const rec_t *rec=nullptr;
+  if (pcur->restore_position(BTR_SEARCH_LEAF, mtr) != btr_pcur_t::CORRUPTED)
+    do
+      rec= dict_getnext_system_low(pcur, mtr);
+    while (rec && rec_get_deleted_flag(rec, 0));
+  return rec;
 }
 
 /********************************************************************//**
@@ -3117,12 +3112,16 @@ loop:
 				"SYS_FOREIGN", int(len), fk_id);
 		/* fall through */
 	default:
+corrupted:
 		ut_free(pcur.old_rec_buf);
 		DBUG_RETURN(err);
 	}
 
 	mtr.start();
-	pcur.restore_position(BTR_SEARCH_LEAF, &mtr);
+	if (pcur.restore_position(BTR_SEARCH_LEAF, &mtr)
+	    != btr_pcur_t::SAME_ALL) {
+		goto corrupted;
+	}
 next_rec:
 	btr_pcur_move_to_next_user_rec(&pcur, &mtr);
 

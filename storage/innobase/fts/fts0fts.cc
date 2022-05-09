@@ -216,10 +216,9 @@ fts_update_max_cache_size(
 /*********************************************************************//**
 This function fetches the document just inserted right before
 we commit the transaction, and tokenize the inserted text data
-and insert into FTS auxiliary table and its cache.
-@return TRUE if successful */
+and insert into FTS auxiliary table and its cache. */
 static
-ulint
+void
 fts_add_doc_by_id(
 /*==============*/
 	fts_trx_table_t*ftt,		/*!< in: FTS trx table */
@@ -3299,10 +3298,9 @@ fts_add_doc_from_tuple(
 /*********************************************************************//**
 This function fetches the document inserted during the committing
 transaction, and tokenize the inserted text data and insert into
-FTS auxiliary table and its cache.
-@return TRUE if successful */
+FTS auxiliary table and its cache. */
 static
-ulint
+void
 fts_add_doc_by_id(
 /*==============*/
 	fts_trx_table_t*ftt,		/*!< in: FTS trx table */
@@ -3358,12 +3356,11 @@ fts_add_doc_by_id(
 	mach_write_to_8((byte*) &temp_doc_id, doc_id);
 	dfield_set_data(dfield, &temp_doc_id, sizeof(temp_doc_id));
 
-	btr_pcur_open_with_no_init(
-		fts_id_index, tuple, PAGE_CUR_LE, BTR_SEARCH_LEAF,
-		&pcur, 0, &mtr);
-
 	/* If we have a match, add the data to doc structure */
-	if (btr_pcur_get_low_match(&pcur) == 1) {
+	if (btr_pcur_open_with_no_init(fts_id_index, tuple, PAGE_CUR_LE,
+				       BTR_SEARCH_LEAF, &pcur, 0, &mtr)
+	    == DB_SUCCESS
+	    && btr_pcur_get_low_match(&pcur) == 1) {
 		const rec_t*	rec;
 		btr_pcur_t*	doc_pcur;
 		const rec_t*	clust_rec;
@@ -3396,13 +3393,16 @@ fts_add_doc_by_id(
 			row_build_row_ref_in_tuple(
 				clust_ref, rec, fts_id_index, NULL);
 
-			btr_pcur_open_with_no_init(
-				clust_index, clust_ref, PAGE_CUR_LE,
-				BTR_SEARCH_LEAF, &clust_pcur, 0, &mtr);
+			if (btr_pcur_open_with_no_init(clust_index, clust_ref,
+						       PAGE_CUR_LE,
+						       BTR_SEARCH_LEAF,
+						       &clust_pcur, 0, &mtr)
+			    != DB_SUCCESS) {
+				goto func_exit;
+			}
 
 			doc_pcur = &clust_pcur;
 			clust_rec = btr_pcur_get_rec(&clust_pcur);
-
 		}
 
 		offsets = rec_get_offsets(clust_rec, clust_index, NULL,
@@ -3483,10 +3483,12 @@ fts_add_doc_by_id(
 				mtr_start(&mtr);
 
 				if (i < num_idx - 1) {
-					ut_d(auto status=)
-					  doc_pcur->restore_position(
-					      BTR_SEARCH_LEAF, &mtr);
-					ut_ad(status == btr_pcur_t::SAME_ALL);
+					if (doc_pcur->restore_position(
+					      BTR_SEARCH_LEAF, &mtr)
+					    != btr_pcur_t::SAME_ALL) {
+						ut_ad("invalid state" == 0);
+						i = num_idx - 1;
+					}
 				}
 			}
 
@@ -3503,7 +3505,6 @@ func_exit:
 	ut_free(pcur.old_rec_buf);
 
 	mem_heap_free(heap);
-	return(TRUE);
 }
 
 

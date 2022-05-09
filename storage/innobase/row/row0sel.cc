@@ -988,7 +988,6 @@ row_sel_get_clust_rec(
 	dict_index_t*	index;
 	rec_t*		clust_rec;
 	rec_t*		old_vers;
-	dberr_t		err		= DB_SUCCESS;
 	mem_heap_t*	heap		= NULL;
 	rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
 	rec_offs*	offsets		= offsets_;
@@ -1006,9 +1005,12 @@ row_sel_get_clust_rec(
 
 	index = dict_table_get_first_index(plan->table);
 
-	btr_pcur_open_with_no_init(index, plan->clust_ref, PAGE_CUR_LE,
-				   BTR_SEARCH_LEAF, &plan->clust_pcur,
-				   0, mtr);
+	dberr_t err = btr_pcur_open_with_no_init(index, plan->clust_ref,
+						 PAGE_CUR_LE, BTR_SEARCH_LEAF,
+						 &plan->clust_pcur, 0, mtr);
+	if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
+		goto err_exit;
+	}
 
 	clust_rec = btr_pcur_get_rec(&(plan->clust_pcur));
 
@@ -1358,7 +1360,7 @@ sel_set_rec_lock(
 Opens a pcur to a table index. */
 MY_ATTRIBUTE((warn_unused_result, nonnull))
 static
-bool
+dberr_t
 row_sel_open_pcur(
 /*==============*/
 	plan_t*		plan,	/*!< in: table plan */
@@ -1388,6 +1390,8 @@ row_sel_open_pcur(
 		cond = UT_LIST_GET_NEXT(cond_list, cond);
 	}
 
+	dberr_t err;
+
 	if (plan->tuple) {
 		n_fields = dtuple_get_n_fields(plan->tuple);
 
@@ -1405,21 +1409,17 @@ row_sel_open_pcur(
 					 que_node_get_val(exp));
 		}
 
-		/* Open pcur to the index */
-
-		btr_pcur_open_with_no_init(index, plan->tuple, plan->mode,
-					   BTR_SEARCH_LEAF, &plan->pcur,
-					   NULL, mtr);
-		plan->pcur_is_open = true;
+		err = btr_pcur_open_with_no_init(index, plan->tuple,
+						 plan->mode, BTR_SEARCH_LEAF,
+						 &plan->pcur, nullptr, mtr);
 	} else {
-		plan->pcur_is_open =
-			btr_pcur_open_at_index_side(plan->asc, index,
-						    BTR_SEARCH_LEAF,
-						    &plan->pcur, false, 0, mtr)
-			== DB_SUCCESS;
+		err = btr_pcur_open_at_index_side(plan->asc, index,
+						  BTR_SEARCH_LEAF, &plan->pcur,
+						  false, 0, mtr);
 	}
 
-	return plan->pcur_is_open;
+	plan->pcur_is_open = err == DB_SUCCESS;
+	return err;
 }
 
 /*********************************************************************//**
@@ -1554,7 +1554,7 @@ row_sel_try_search_shortcut(
 	ut_ad(plan->unique_search);
 	ut_ad(!plan->must_get_clust);
 
-	if (!row_sel_open_pcur(plan, mtr)) {
+	if (row_sel_open_pcur(plan, mtr) != DB_SUCCESS) {
 		return SEL_RETRY;
 	}
 
@@ -1737,8 +1737,9 @@ table_loop:
 	if (!plan->pcur_is_open) {
 		/* Evaluate the expressions to build the search tuple and
 		open the cursor */
-		if (!row_sel_open_pcur(plan, &mtr)) {
-			err = DB_CORRUPTION;
+		err = row_sel_open_pcur(plan, &mtr);
+
+		if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
 			goto mtr_commit_exit;
 		}
 
@@ -3338,7 +3339,6 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 	dict_index_t*	clust_index;
 	const rec_t*	clust_rec;
 	rec_t*		old_vers;
-	dberr_t		err;
 	trx_t*		trx;
 
 	*out_rec = NULL;
@@ -3352,9 +3352,13 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 
 	clust_index = dict_table_get_first_index(sec_index->table);
 
-	btr_pcur_open_with_no_init(clust_index, prebuilt->clust_ref,
-				   PAGE_CUR_LE, BTR_SEARCH_LEAF,
-				   prebuilt->clust_pcur, 0, mtr);
+	dberr_t err = btr_pcur_open_with_no_init(clust_index,
+						 prebuilt->clust_ref,
+						 PAGE_CUR_LE, BTR_SEARCH_LEAF,
+						 prebuilt->clust_pcur, 0, mtr);
+	if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
+		return err;
+	}
 
 	clust_rec = btr_pcur_get_rec(prebuilt->clust_pcur);
 
@@ -3488,7 +3492,7 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 		case DB_SUCCESS_LOCKED_REC:
 			break;
 		default:
-			goto err_exit;
+			return err;
 		}
 	} else {
 		/* This is a non-locking consistent read: if necessary, fetch
@@ -3519,9 +3523,8 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 					clust_rec, offsets, offset_heap, &old_vers,
 					vrow, mtr);
 
-				if (err != DB_SUCCESS) {
-
-					goto err_exit;
+				if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
+					return err;
 				}
 				cached_lsn = lsn;
 				cached_page_id = bpage.id();
@@ -3545,7 +3548,7 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 			}
 
 			if (old_vers == NULL) {
-				goto err_exit;
+				return err;
 			}
 
 			clust_rec = old_vers;
@@ -3581,7 +3584,7 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 			case DB_SUCCESS_LOCKED_REC:
 				break;
 			default:
-				goto err_exit;
+				return err;
 			}
 		}
 
@@ -3598,8 +3601,7 @@ func_exit:
 		btr_pcur_store_position(prebuilt->clust_pcur, mtr);
 	}
 
-err_exit:
-	return(err);
+	return err;
 }
 
 /** Restores cursor position after it has been stored. We have to take into
@@ -3660,7 +3662,9 @@ prev:
 		if (btr_pcur_is_on_user_rec(pcur) && !moves_up
 		    && !rec_is_metadata(btr_pcur_get_rec(pcur),
 					*pcur->btr_cur.index)) {
-			btr_pcur_move_to_prev(pcur, mtr);
+			if (!btr_pcur_move_to_prev(pcur, mtr)) {
+				return true;
+			}
 		}
 		return true;
 	case BTR_PCUR_BEFORE:
@@ -3940,8 +3944,12 @@ row_sel_try_search_shortcut_for_mysql(
 
 	srw_spin_lock* ahi_latch = btr_search_sys.get_latch(*index);
 	ahi_latch->rd_lock(SRW_LOCK_CALL);
-	btr_pcur_open_with_no_init(index, search_tuple, PAGE_CUR_GE,
-				   BTR_SEARCH_LEAF, pcur, ahi_latch, mtr);
+	if (btr_pcur_open_with_no_init(index, search_tuple, PAGE_CUR_GE,
+				       BTR_SEARCH_LEAF, pcur, ahi_latch, mtr)
+	    != DB_SUCCESS) {
+		goto retry;
+	}
+
 	rec = btr_pcur_get_rec(pcur);
 
 	if (!page_rec_is_user_rec(rec) || rec_is_metadata(rec, *index)) {

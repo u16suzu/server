@@ -137,7 +137,8 @@ btr_pcur_open_with_no_init_func(
 	srw_spin_lock*	ahi_latch,
 				/*!< in: currently held AHI rdlock, or NULL */
 #endif /* BTR_CUR_HASH_ADAPT */
-	mtr_t*		mtr);	/*!< in: mtr */
+	mtr_t*		mtr)	/*!< in: mtr */
+	MY_ATTRIBUTE((warn_unused_result));
 #ifdef BTR_CUR_HASH_ADAPT
 # define btr_pcur_open_with_no_init(ix,t,md,l,cur,ahi,m)		\
 	btr_pcur_open_with_no_init_func(ix,t,md,l,cur,ahi,m)
@@ -256,13 +257,14 @@ btr_pcur_move_to_next(
 /*********************************************************//**
 Moves the persistent cursor to the previous record in the tree. If no records
 are left, the cursor stays 'before first in tree'.
-@return TRUE if the cursor was not before first in tree */
-ibool
+@return true if the cursor was not before first in tree */
+bool
 btr_pcur_move_to_prev(
 /*==================*/
 	btr_pcur_t*	cursor,	/*!< in: persistent cursor; NOTE that the
 				function may release the page latch */
-	mtr_t*		mtr);	/*!< in: mtr */
+	mtr_t*		mtr)	/*!< in: mtr */
+	MY_ATTRIBUTE((nonnull, warn_unused_result));
 /*********************************************************//**
 Moves the persistent cursor to the next user record in the tree. If no user
 records are left, the cursor ends up 'after last in tree'.
@@ -380,7 +382,9 @@ struct btr_pcur_t{
 		SAME_UNIQ,
 		/** cursor position is not on user rec or points on the record
 		with not the same uniq field values as in the stored record */
-		NOT_SAME
+		NOT_SAME,
+		/** the index tree is corrupted */
+		CORRUPTED
 	};
 	/** a B-tree cursor */
 	btr_cur_t	btr_cur;
@@ -439,6 +443,7 @@ struct btr_pcur_t{
 
 	/** Return the index of this persistent cursor */
 	dict_index_t*	index() const { return(btr_cur.index); }
+	MY_ATTRIBUTE((nonnull, warn_unused_result))
 	/** Restores the stored position of a persistent cursor bufferfixing
 	the page and obtaining the specified latches. If the cursor position
 	was saved when the
@@ -454,12 +459,13 @@ struct btr_pcur_t{
 	empty tree: restores to before first or after the last in the tree.
 	@param restore_latch_mode BTR_SEARCH_LEAF, ...
 	@param mtr mtr
-	@return btr_pcur_t::SAME_ALL cursor position on user rec and points on
+	@retval SAME_ALL cursor position on user rec and points on
 	the record with the same field values as in the stored record,
-	btr_pcur_t::SAME_UNIQ cursor position is on user rec and points on the
+	@retval SAME_UNIQ cursor position is on user rec and points on the
 	record with the same unique field values as in the stored record,
-	btr_pcur_t::NOT_SAME cursor position is not on user rec or points on
-	the record with not the samebuniq field values as in the stored */
+	@retval NOT_SAME cursor position is not on user rec or points on
+	the record with not the same uniq field values as in the stored
+	@retval CORRUPTED if the index is corrupted */
 	restore_status restore_position(ulint latch_mode, mtr_t *mtr);
 };
 

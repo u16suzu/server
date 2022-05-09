@@ -375,18 +375,17 @@ private:
   /** Close the persistent cursor and commit the mini-transaction. */
   void close() noexcept { m_mtr.commit(); btr_pcur_close(&m_pcur); }
 
-	/** Position the cursor on the next record.
-	@return DB_SUCCESS or error code */
-	dberr_t	next() UNIV_NOTHROW;
+  /** Position the cursor on the next record.
+  @return DB_SUCCESS or error code */
+  dberr_t next() noexcept;
 
-	/** Store the persistent cursor position and reopen the
-	B-tree cursor in BTR_MODIFY_TREE mode, because the
-	tree structure may be changed during a pessimistic delete. */
-	void	purge_pessimistic_delete() UNIV_NOTHROW;
+  /** Store the persistent cursor position and reopen the
+  B-tree cursor in BTR_MODIFY_TREE mode, because the
+  tree structure may be changed during a pessimistic delete. */
+  inline dberr_t purge_pessimistic_delete() noexcept;
 
-	/** Purge delete-marked records.
-	@param offsets current row offsets. */
-	void	purge() UNIV_NOTHROW;
+  /** Purge a delete-marked record. */
+  dberr_t purge() noexcept;
 
 protected:
 	// Disable copying
@@ -1507,7 +1506,10 @@ IndexPurge::garbage_collect() UNIV_NOTHROW
 		if (!deleted) {
 			++m_n_rows;
 		} else {
-			purge();
+			err = purge();
+			if (err != DB_SUCCESS) {
+				break;
+			}
 		}
 	}
 
@@ -1544,8 +1546,7 @@ inline bool IndexPurge::open() noexcept
 /**
 Position the cursor on the next record.
 @return DB_SUCCESS or error code */
-dberr_t
-IndexPurge::next() UNIV_NOTHROW
+dberr_t IndexPurge::next() noexcept
 {
 	btr_pcur_move_to_next_on_page(&m_pcur);
 
@@ -1568,7 +1569,10 @@ IndexPurge::next() UNIV_NOTHROW
 
 	mtr_set_log_mode(&m_mtr, MTR_LOG_NO_REDO);
 
-	m_pcur.restore_position(BTR_MODIFY_LEAF, &m_mtr);
+	if (m_pcur.restore_position(BTR_MODIFY_LEAF, &m_mtr)
+	    == btr_pcur_t::CORRUPTED) {
+		return DB_CORRUPTION;
+	}
 	/* The following is based on btr_pcur_move_to_next_user_rec(). */
 	m_pcur.old_stored = false;
 	ut_ad(m_pcur.latch_mode == BTR_MODIFY_LEAF);
@@ -1639,40 +1643,36 @@ IndexPurge::next() UNIV_NOTHROW
 Store the persistent cursor position and reopen the
 B-tree cursor in BTR_MODIFY_TREE mode, because the
 tree structure may be changed during a pessimistic delete. */
-void
-IndexPurge::purge_pessimistic_delete() UNIV_NOTHROW
+inline dberr_t IndexPurge::purge_pessimistic_delete() noexcept
 {
-	dberr_t	err;
+  dberr_t err;
+  if (m_pcur.restore_position(BTR_MODIFY_TREE | BTR_LATCH_FOR_DELETE,
+                              &m_mtr) != btr_pcur_t::CORRUPTED)
+  {
+    ut_ad(rec_get_deleted_flag(btr_pcur_get_rec(&m_pcur),
+                               m_index->table->not_redundant()));
+    btr_cur_pessimistic_delete(&err, FALSE, btr_pcur_get_btr_cur(&m_pcur), 0,
+                               false, &m_mtr);
+  }
+  else
+    err= DB_CORRUPTION;
 
-	m_pcur.restore_position(BTR_MODIFY_TREE | BTR_LATCH_FOR_DELETE, &m_mtr);
-
-	ut_ad(rec_get_deleted_flag(
-			btr_pcur_get_rec(&m_pcur),
-			dict_table_is_comp(m_index->table)));
-
-	btr_cur_pessimistic_delete(
-		&err, FALSE, btr_pcur_get_btr_cur(&m_pcur), 0, false, &m_mtr);
-
-	ut_a(err == DB_SUCCESS);
-
-	/* Reopen the B-tree cursor in BTR_MODIFY_LEAF mode */
-	mtr_commit(&m_mtr);
+  m_mtr.commit();
+  return err;
 }
 
-/**
-Purge delete-marked records. */
-void
-IndexPurge::purge() UNIV_NOTHROW
+dberr_t IndexPurge::purge() noexcept
 {
-	btr_pcur_store_position(&m_pcur, &m_mtr);
+  btr_pcur_store_position(&m_pcur, &m_mtr);
+  dberr_t err= purge_pessimistic_delete();
 
-	purge_pessimistic_delete();
-
-	mtr_start(&m_mtr);
-
-	mtr_set_log_mode(&m_mtr, MTR_LOG_NO_REDO);
-
-	m_pcur.restore_position(BTR_MODIFY_LEAF, &m_mtr);
+  m_mtr.start();
+  m_mtr.set_log_mode(MTR_LOG_NO_REDO);
+  if (err == DB_SUCCESS)
+    err= (m_pcur.restore_position(BTR_MODIFY_LEAF, &m_mtr) ==
+          btr_pcur_t::CORRUPTED)
+      ? DB_CORRUPTION : DB_SUCCESS;
+  return err;
 }
 
 /** Adjust the BLOB reference for a single column that is externally stored

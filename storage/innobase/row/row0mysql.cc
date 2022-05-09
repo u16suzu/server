@@ -1792,56 +1792,29 @@ row_unlock_for_mysql(
 	row_prebuilt_t*	prebuilt,
 	ibool		has_latches_on_recs)
 {
-	btr_pcur_t*	pcur		= prebuilt->pcur;
-	btr_pcur_t*	clust_pcur	= prebuilt->clust_pcur;
-	trx_t*		trx		= prebuilt->trx;
-
-	ut_ad(prebuilt != NULL);
-	ut_ad(trx != NULL);
-	ut_ad(trx->isolation_level <= TRX_ISO_READ_COMMITTED);
-
-	if (dict_index_is_spatial(prebuilt->index)) {
-		return;
-	}
-
-	trx->op_info = "unlock_row";
-
-	if (prebuilt->new_rec_locks >= 1) {
+	if (prebuilt->new_rec_locks == 1 && prebuilt->index->is_clust()) {
+		trx_t* trx = prebuilt->trx;
+		ut_ad(trx->isolation_level <= TRX_ISO_READ_COMMITTED);
+		trx->op_info = "unlock_row";
 
 		const rec_t*	rec;
 		dict_index_t*	index;
 		trx_id_t	rec_trx_id;
 		mtr_t		mtr;
+		btr_pcur_t*	pcur	= prebuilt->pcur;
 
 		mtr_start(&mtr);
 
 		/* Restore the cursor position and find the record */
 
-		if (!has_latches_on_recs) {
-			pcur->restore_position(BTR_SEARCH_LEAF, &mtr);
+		if (!has_latches_on_recs
+		    && pcur->restore_position(BTR_SEARCH_LEAF, &mtr)
+		    != btr_pcur_t::SAME_ALL) {
+			goto no_unlock;
 		}
 
 		rec = btr_pcur_get_rec(pcur);
 		index = btr_pcur_get_btr_cur(pcur)->index;
-
-		if (prebuilt->new_rec_locks >= 2) {
-			/* Restore the cursor position and find the record
-			in the clustered index. */
-
-			if (!has_latches_on_recs) {
-				clust_pcur->restore_position(BTR_SEARCH_LEAF,
-							  &mtr);
-			}
-
-			rec = btr_pcur_get_rec(clust_pcur);
-			index = btr_pcur_get_btr_cur(clust_pcur)->index;
-		}
-
-		if (!dict_index_is_clust(index)) {
-			/* This is not a clustered index record.  We
-			do not know how to unlock the record. */
-			goto no_unlock;
-		}
 
 		/* If the record has been modified by this
 		transaction, do not unlock it. */
@@ -1877,24 +1850,11 @@ row_unlock_for_mysql(
 				rec,
 				static_cast<enum lock_mode>(
 					prebuilt->select_lock_type));
-
-			if (prebuilt->new_rec_locks >= 2) {
-				rec = btr_pcur_get_rec(clust_pcur);
-
-				lock_rec_unlock(
-					trx,
-					btr_pcur_get_block(clust_pcur)
-					->page.id(),
-					rec,
-					static_cast<enum lock_mode>(
-						prebuilt->select_lock_type));
-			}
 		}
 no_unlock:
 		mtr_commit(&mtr);
+		trx->op_info = "";
 	}
-
-	trx->op_info = "";
 }
 
 /** Write query start time as SQL field data to a buffer. Needed by InnoDB.

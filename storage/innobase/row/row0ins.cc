@@ -1137,9 +1137,12 @@ row_ins_foreign_check_on_constraint(
 
 		ref = row_build_row_ref(ROW_COPY_POINTERS, index, rec,
 					tmp_heap);
-		btr_pcur_open_with_no_init(clust_index, ref,
-					   PAGE_CUR_LE, BTR_SEARCH_LEAF,
-					   cascade->pcur, 0, mtr);
+		err = btr_pcur_open_with_no_init(clust_index, ref,
+						 PAGE_CUR_LE, BTR_SEARCH_LEAF,
+						 cascade->pcur, 0, mtr);
+		if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
+			goto nonstandard_exit_func;
+		}
 
 		clust_rec = btr_pcur_get_rec(cascade->pcur);
 		clust_block = btr_pcur_get_block(cascade->pcur);
@@ -1350,7 +1353,10 @@ row_ins_foreign_check_on_constraint(
 
 	/* Restore pcur position */
 
-	pcur->restore_position(BTR_SEARCH_LEAF, mtr);
+	if (pcur->restore_position(BTR_SEARCH_LEAF, mtr)
+	    != btr_pcur_t::SAME_ALL) {
+		err = DB_CORRUPTION;
+	}
 
 	if (tmp_heap) {
 		mem_heap_free(tmp_heap);
@@ -1369,7 +1375,10 @@ nonstandard_exit_func:
 	mtr_commit(mtr);
 	mtr_start(mtr);
 
-	pcur->restore_position(BTR_SEARCH_LEAF, mtr);
+	if (pcur->restore_position(BTR_SEARCH_LEAF, mtr)
+	    != btr_pcur_t::SAME_ALL && err == DB_SUCCESS) {
+		err = DB_CORRUPTION;
+	}
 
 	DBUG_RETURN(err);
 }

@@ -2167,7 +2167,8 @@ fail:
       os_file_close(d);
 
     mtr.start();
-    pcur.restore_position(BTR_SEARCH_LEAF, &mtr);
+    if (pcur.restore_position(BTR_SEARCH_LEAF, &mtr) == btr_pcur_t::CORRUPTED)
+      break;
   }
 
 all_fail:

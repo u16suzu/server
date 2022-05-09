@@ -2008,8 +2008,13 @@ scan_next:
 				/* Restore position on the record, or its
 				predecessor if the record was purged
 				meanwhile. */
-				pcur.restore_position(
-					BTR_SEARCH_LEAF, &mtr);
+				if (pcur.restore_position(BTR_SEARCH_LEAF,
+							  &mtr)
+				    == btr_pcur_t::CORRUPTED) {
+corrupted_index:
+					err = DB_CORRUPTION;
+					goto func_exit;
+                                }
 				/* Move to the successor of the
 				original record. */
 				if (!btr_pcur_move_to_next_user_rec(
@@ -2553,8 +2558,11 @@ write_buffers:
 						overflow). */
 						mtr.start();
 						mtr_started = true;
-						pcur.restore_position(
-							BTR_SEARCH_LEAF, &mtr);
+						if (pcur.restore_position(
+							BTR_SEARCH_LEAF, &mtr)
+						    == btr_pcur_t::CORRUPTED) {
+							goto corrupted_index;
+						}
 						buf = row_merge_buf_empty(buf);
 						merge_buf[i] = buf;
 						/* Restart the outer loop on the
