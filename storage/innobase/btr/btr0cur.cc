@@ -3628,7 +3628,6 @@ btr_cur_pessimistic_insert(
 	dict_index_t*	index		= cursor->index;
 	big_rec_t*	big_rec_vec	= NULL;
 	bool		inherit = false;
-	bool		success;
 	uint32_t	n_reserved	= 0;
 
 	ut_ad(dtuple_check_typed(entry));
@@ -3655,19 +3654,16 @@ btr_cur_pessimistic_insert(
 		return(err);
 	}
 
-	if (!(flags & BTR_NO_UNDO_LOG_FLAG)) {
-		/* First reserve enough free space for the file segments
-		of the index tree, so that the insert will not fail because
-		of lack of space */
+	/* First reserve enough free space for the file segments of
+	the index tree, so that the insert will not fail because of
+	lack of space */
 
-		uint32_t n_extents = uint32_t(cursor->tree_height / 16 + 3);
-
-		success = fsp_reserve_free_extents(&n_reserved,
-						   index->table->space,
-						   n_extents, FSP_NORMAL, mtr);
-		if (!success) {
-			return(DB_OUT_OF_FILE_SPACE);
-		}
+	if (!index->is_ibuf()
+	    && !fsp_reserve_free_extents(&n_reserved, index->table->space,
+					 uint32_t(cursor->tree_height / 16
+						  + 3),
+					 FSP_NORMAL, mtr)) {
+		return DB_OUT_OF_FILE_SPACE;
 	}
 
 	if (page_zip_rec_needs_ext(rec_get_converted_size(index, entry, n_ext),
@@ -3705,7 +3701,7 @@ btr_cur_pessimistic_insert(
 					    entry, n_ext, mtr, &err);
 
 	if (!*rec) {
-		return err;
+		goto func_exit;
 	}
 
 	ut_ad(page_rec_get_next(btr_cur_get_rec(cursor)) == *rec
@@ -3756,10 +3752,12 @@ btr_cur_pessimistic_insert(
 		}
 	}
 
+	err = DB_SUCCESS;
+func_exit:
 	index->table->space->release_free_extents(n_reserved);
 	*big_rec = big_rec_vec;
 
-	return(DB_SUCCESS);
+	return err;
 }
 
 /*==================== B-TREE UPDATE =========================*/
