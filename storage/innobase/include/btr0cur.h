@@ -503,8 +503,8 @@ btr_cur_pessimistic_delete(
 /** Delete the node pointer in a parent page.
 @param[in,out]	parent	cursor pointing to parent record
 @param[in,out]	mtr	mini-transaction */
-void btr_cur_node_ptr_delete(btr_cur_t* parent, mtr_t* mtr)
-	MY_ATTRIBUTE((nonnull));
+dberr_t btr_cur_node_ptr_delete(btr_cur_t* parent, mtr_t* mtr)
+	MY_ATTRIBUTE((nonnull, warn_unused_result));
 /***********************************************************//**
 Parses a redo log record of updating a record in-place.
 @return end of log record or NULL */

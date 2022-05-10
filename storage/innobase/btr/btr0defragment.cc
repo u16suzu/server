@@ -401,14 +401,17 @@ btr_defragment_merge_pages(
 	} else if (n_recs_to_move == n_recs) {
 		/* The whole page is merged with the previous page,
 		free it. */
-		const page_id_t from{from_block->page.id()};
-		lock_update_merge_left(*to_block, orig_pred, from);
+		lock_update_merge_left(*to_block, orig_pred,
+				       from_block->page.id());
 		btr_search_drop_page_hash_index(from_block);
-		ut_a(DB_SUCCESS == btr_level_list_remove(*from_block, *index,
-							 mtr));
-		btr_cur_node_ptr_delete(&parent, mtr);
-		/* btr_blob_dbg_remove(from_page, index,
-		"btr_defragment_n_pages"); */
+		if (btr_level_list_remove(*from_block, *index, mtr)
+		    != DB_SUCCESS
+		    || btr_cur_node_ptr_delete(&parent, mtr)
+		    != DB_SUCCESS) {
+corrupted:
+			dict_set_corrupted(index, "defragment", false);
+			return nullptr;
+		}
 		btr_page_free(index, from_block, mtr);
 	} else {
 		// There are still records left on the page, so
@@ -425,7 +428,10 @@ btr_defragment_merge_pages(
 						    orig_pred,
 						    from_block);
 			// FIXME: reuse the node_ptr!
-			btr_cur_node_ptr_delete(&parent, mtr);
+			if (btr_cur_node_ptr_delete(&parent, mtr)
+			    != DB_SUCCESS) {
+				goto corrupted;
+			}
 			rec = page_rec_get_next(
 				page_get_infimum_rec(from_page));
 			node_ptr = dict_index_build_node_ptr(
@@ -434,8 +440,7 @@ btr_defragment_merge_pages(
 			if (btr_insert_on_non_leaf_level(0, index, level+1,
                                                          node_ptr, mtr)
                             != DB_SUCCESS) {
-				dict_set_corrupted(index, "defragment", false);
-                                return nullptr;
+				goto corrupted;
                         }
 		}
 		to_block = from_block;

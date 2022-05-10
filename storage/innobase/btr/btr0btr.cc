@@ -3507,7 +3507,10 @@ retry:
 			/* No GAP lock needs to be worrying about */
 			lock_sys.prdt_page_free_from_discard(id);
 		} else {
-			btr_cur_node_ptr_delete(&father_cursor, mtr);
+			if (btr_cur_node_ptr_delete(&father_cursor, mtr)
+			    != DB_SUCCESS) {
+				goto err_exit;
+			}
 			if (index->has_locking()) {
 				lock_update_merge_left(
 					*merge_block, orig_pred, id);
@@ -3972,11 +3975,16 @@ btr_discard_page(
 	if (dict_index_is_spatial(index)) {
 		rtr_node_ptr_delete(&parent_cursor, mtr);
 	} else {
-		btr_cur_node_ptr_delete(&parent_cursor, mtr);
+		if (btr_cur_node_ptr_delete(&parent_cursor, mtr)
+		    != DB_SUCCESS) {
+			return;
+		}
 	}
 
 	/* Remove the page from the level list */
-	ut_a(DB_SUCCESS == btr_level_list_remove(*block, *index, mtr));
+	if (btr_level_list_remove(*block, *index, mtr) != DB_SUCCESS) {
+		return;
+	}
 
 #ifdef UNIV_ZIP_DEBUG
 	{

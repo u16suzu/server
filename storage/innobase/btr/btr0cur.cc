@@ -762,7 +762,7 @@ btr_cur_optimistic_latch_leaves(
 			? RW_S_LATCH : RW_X_LATCH;
 
 		if (left_page_no != FIL_NULL) {
-			dberr_t	err = DB_SUCCESS;
+			dberr_t	err;
 			cursor->left_block = buf_page_get_gen(
 				page_id_t(cursor->index->table->space_id,
 					  left_page_no),
@@ -1232,7 +1232,6 @@ btr_cur_search_to_nth_level_func(
 	page_cur_t*	page_cursor;
 	btr_op_t	btr_op;
 	ulint		root_height = 0; /* remove warning */
-	dberr_t		err = DB_SUCCESS;
 
 	btr_intention_t	lock_intention;
 	bool		modify_external;
@@ -1394,7 +1393,7 @@ btr_cur_search_to_nth_level_func(
 		      || mode != PAGE_CUR_LE);
 		++btr_cur_n_sea;
 
-		DBUG_RETURN(err);
+		DBUG_RETURN(DB_SUCCESS);
 	} else {
 		++btr_cur_n_non_sea;
 	}
@@ -1567,6 +1566,7 @@ search_loop:
 retry_page_get:
 	ut_ad(n_blocks < BTR_MAX_LEVELS);
 	tree_savepoints[n_blocks] = mtr_set_savepoint(mtr);
+	dberr_t err;
 	block = buf_page_get_gen(page_id, zip_size, rw_latch, guess,
 				 buf_mode, mtr, &err,
 				 height == 0 && !index->is_clust());
@@ -2472,7 +2472,7 @@ btr_cur_open_at_index_side(
 	mem_heap_t*	heap		= NULL;
 	rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
 	rec_offs*	offsets		= offsets_;
-	dberr_t		err = DB_SUCCESS;
+	dberr_t		err;
 
 	rec_offs_init(offsets_);
 
@@ -2880,7 +2880,7 @@ btr_cur_open_at_rnd_pos(
 
 	page_id_t		page_id(index->table->space_id, index->page);
 	const ulint		zip_size = index->table->space->zip_size();
-	dberr_t			err = DB_SUCCESS;
+	dberr_t			err;
 
 	if (root_leaf_rw_latch == RW_X_LATCH) {
 		node_ptr_max_size = btr_node_ptr_max_size(index);
@@ -5777,7 +5777,13 @@ discard_page:
 				*err = DB_CORRUPTION;
 				goto err_exit;
 			}
-			btr_cur_node_ptr_delete(&cursor, mtr);
+			*err = btr_cur_node_ptr_delete(&cursor, mtr);
+			if (*err != DB_SUCCESS) {
+got_err:
+				ret = FALSE;
+				goto err_exit;
+			}
+
 			const ulint	level = btr_page_get_level(page);
 			// FIXME: reuse the node_ptr from above
 			dtuple_t*	node_ptr = dict_index_build_node_ptr(
@@ -5788,7 +5794,7 @@ discard_page:
 				flags, index, level + 1, node_ptr, mtr);
 			if (*err != DB_SUCCESS) {
 				ret = FALSE;
-				goto err_exit;
+				goto got_err;
 			}
 
 			ut_d(parent_latched = true);
@@ -5857,7 +5863,7 @@ err_exit:
 /** Delete the node pointer in a parent page.
 @param[in,out]	parent	cursor pointing to parent record
 @param[in,out]	mtr	mini-transaction */
-void btr_cur_node_ptr_delete(btr_cur_t* parent, mtr_t* mtr)
+dberr_t btr_cur_node_ptr_delete(btr_cur_t* parent, mtr_t* mtr)
 {
 	ut_ad(mtr->memo_contains_flagged(btr_cur_get_block(parent),
 					 MTR_MEMO_PAGE_X_FIX));
@@ -5865,10 +5871,11 @@ void btr_cur_node_ptr_delete(btr_cur_t* parent, mtr_t* mtr)
 	ibool compressed = btr_cur_pessimistic_delete(&err, TRUE, parent,
 						      BTR_CREATE_FLAG, false,
 						      mtr);
-	ut_a(err == DB_SUCCESS);
-	if (!compressed) {
+	if (err == DB_SUCCESS && !compressed) {
 		btr_cur_compress_if_useful(parent, FALSE, mtr);
 	}
+
+	return err;
 }
 
 /*******************************************************************//**
@@ -5981,7 +5988,7 @@ btr_estimate_n_rows_in_range_on_level(
 		mtr_t		mtr;
 		page_t*		page;
 		buf_block_t*	block;
-		dberr_t		err=DB_SUCCESS;
+		dberr_t		err;
 
 		mtr_start(&mtr);
 
