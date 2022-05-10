@@ -93,10 +93,10 @@ row_undo_mod_clust_low(
 	pcur = &node->pcur;
 	btr_cur = btr_pcur_get_btr_cur(pcur);
 
-	ut_d(auto pcur_restore_result =)
-	pcur->restore_position(mode, mtr);
+	if (pcur->restore_position(mode, mtr) != btr_pcur_t::SAME_ALL) {
+		return DB_CORRUPTION;
+	}
 
-	ut_ad(pcur_restore_result == btr_pcur_t::SAME_ALL);
 	ut_ad(rec_get_trx_id(btr_cur_get_rec(btr_cur),
 			     btr_cur_get_index(btr_cur))
 	      == thr_get_trx(thr)->id
