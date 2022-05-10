@@ -426,7 +426,7 @@ static bool row_undo_ins_parse_undo_rec(undo_node_t* node, bool dict_locked)
 		if (strlen(table->name.m_name) != len
 		    || memcmp(table->name.m_name, ptr, len)) {
 			dict_table_rename_in_cache(table, name, true);
-		} else if (table->space) {
+		} else if (table->space && table->space->id) {
 			const auto s = table->space->name();
 			if (len != s.size() || memcmp(ptr, s.data(), len)) {
 				table->rename_tablespace(name, true);
