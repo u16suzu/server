@@ -2204,6 +2204,7 @@ void buf_page_free(fil_space_t *space, uint32_t page, mtr_t *mtr)
   ++buf_pool.stat.n_page_gets;
   const page_id_t page_id(space->id, page);
   buf_pool_t::hash_chain &chain= buf_pool.page_hash.cell_get(page_id.fold());
+  uint32_t fix;
   buf_block_t *block;
   {
     transactional_shared_lock_guard<page_hash_latch> g
@@ -2216,7 +2217,13 @@ void buf_page_free(fil_space_t *space, uint32_t page, mtr_t *mtr)
     /* To avoid a deadlock with buf_LRU_free_page() of some other page
     and buf_page_write_complete() of this page, we must not wait for a
     page latch while holding a page_hash latch. */
-    block->page.fix();
+    fix= block->page.fix();
+  }
+
+  if (UNIV_UNLIKELY(fix < buf_page_t::UNFIXED))
+  {
+    block->page.unfix();
+    return;
   }
 
   block->page.lock.x_lock();
