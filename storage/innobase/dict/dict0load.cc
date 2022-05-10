@@ -3119,7 +3119,8 @@ corrupted:
 
 	mtr.start();
 	if (pcur.restore_position(BTR_SEARCH_LEAF, &mtr)
-	    != btr_pcur_t::SAME_ALL) {
+	    == btr_pcur_t::CORRUPTED) {
+		mtr.commit();
 		goto corrupted;
 	}
 next_rec:
