@@ -690,8 +690,8 @@ processed:
 		    == btr_pcur_t::CORRUPTED
 		    ? nullptr
 		    : btr_defragment_n_pages(btr_pcur_get_block(item->pcur),
-					   index, srv_defragment_n_pages,
-					   &mtr)) {
+					     index, srv_defragment_n_pages,
+					     &mtr)) {
 			/* If we haven't reached the end of the index,
 			place the cursor on the last record of last page,
 			store the cursor position, and put back in queue. */

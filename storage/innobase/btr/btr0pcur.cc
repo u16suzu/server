@@ -552,10 +552,10 @@ btr_pcur_move_backward_from_page(
 
 	mtr_start(mtr);
 
-	static_assert(BTR_SEARCH_PREV == (64 | BTR_SEARCH_LEAF), "");
-	static_assert(BTR_MODIFY_PREV == (64 | BTR_MODIFY_LEAF), "");
+	static_assert(BTR_SEARCH_PREV == (4 | BTR_SEARCH_LEAF), "");
+	static_assert(BTR_MODIFY_PREV == (4 | BTR_MODIFY_LEAF), "");
 
-	if (UNIV_UNLIKELY(cursor->restore_position(64 | latch_mode, mtr)
+	if (UNIV_UNLIKELY(cursor->restore_position(4 | latch_mode, mtr)
 			  == btr_pcur_t::CORRUPTED)) {
 		return true;
 	}

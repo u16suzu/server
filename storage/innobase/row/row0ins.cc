@@ -2876,10 +2876,6 @@ row_ins_sec_index_entry_low(
 	the function will return in both low_match and up_match of the
 	cursor sensible values */
 
-	if (!thr_get_trx(thr)->check_unique_secondary) {
-		search_mode |= BTR_IGNORE_SEC_UNIQUE;
-	}
-
 	if (dict_index_is_spatial(index)) {
 		cursor.index = index;
 		rtr_init_rtr_info(&rtr_info, false, &cursor, index, false);
@@ -2890,9 +2886,10 @@ row_ins_sec_index_entry_low(
 			search_mode,
 			&cursor, 0, &mtr);
 
-		if (err == DB_SUCCESS && mode == BTR_MODIFY_LEAF
+		if (err == DB_SUCCESS && search_mode == BTR_MODIFY_LEAF
 		    && rtr_info.mbr_adj) {
 			mtr_commit(&mtr);
+			search_mode = mode = BTR_MODIFY_TREE;
 			rtr_clean_rtr_info(&rtr_info, true);
 			rtr_init_rtr_info(&rtr_info, false, &cursor,
 					  index, false);
@@ -2903,13 +2900,10 @@ row_ins_sec_index_entry_low(
 			} else {
 				index->set_modified(mtr);
 			}
-			search_mode &= ulint(~BTR_MODIFY_LEAF);
-			search_mode |= BTR_MODIFY_TREE;
 			err = btr_cur_search_to_nth_level(
 				index, 0, entry, PAGE_CUR_RTREE_INSERT,
 				search_mode,
 				&cursor, 0, &mtr);
-			mode = BTR_MODIFY_TREE;
 		}
 
 		DBUG_EXECUTE_IF(
@@ -2917,6 +2911,10 @@ row_ins_sec_index_entry_low(
 			goto func_exit;});
 
 	} else {
+		if (!thr_get_trx(thr)->check_unique_secondary) {
+			search_mode |= BTR_IGNORE_SEC_UNIQUE;
+		}
+
 		err = btr_cur_search_to_nth_level(
 			index, 0, entry, PAGE_CUR_LE,
 			search_mode,
