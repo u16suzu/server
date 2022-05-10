@@ -409,7 +409,7 @@ btr_page_split_and_insert(
 	ulint		n_ext,	/*!< in: number of externally stored columns */
 	mtr_t*		mtr,	/*!< in: mtr */
 	dberr_t*	err)	/*!< out: error code */
-	MY_ATTRIBUTE((warn_unused_result));
+	MY_ATTRIBUTE((nonnull, warn_unused_result));
 /*******************************************************//**
 Inserts a data tuple to a tree on a non-leaf level. It is assumed
 that mtr holds an x-latch on the tree. */
