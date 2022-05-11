@@ -1473,7 +1473,9 @@ fsp_alloc_seg_inode(fil_space_t *space, buf_block_t *header,
 	ulint n = fsp_seg_inode_page_find_free(block->page.frame, 0,
 					       physical_size);
 
-	ut_a(n < FSP_SEG_INODES_PER_PAGE(physical_size));
+	if (UNIV_UNLIKELY(n >= FSP_SEG_INODES_PER_PAGE(physical_size))) {
+		return nullptr;
+	}
 
 	inode = fsp_seg_inode_page_get_nth_inode(block->page.frame, n);
 
