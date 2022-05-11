@@ -168,9 +168,10 @@ trx_undo_get_prev_rec_from_prev_page(buf_block_t *&block, uint16_t rec,
                                      uint32_t page_no, uint16_t offset,
                                      bool shared, mtr_t *mtr)
 {
-  uint32_t prev_page_no= flst_get_prev_addr(TRX_UNDO_PAGE_HDR +
-                                            TRX_UNDO_PAGE_NODE +
-                                            block->page.frame).page;
+  uint32_t prev_page_no= mach_read_from_4(TRX_UNDO_PAGE_HDR +
+                                          TRX_UNDO_PAGE_NODE +
+                                          FLST_PREV + FIL_ADDR_PAGE +
+                                          block->page.frame);
 
   if (prev_page_no == FIL_NULL)
     return nullptr;
@@ -240,8 +241,9 @@ trx_undo_get_next_rec_from_next_page(const buf_block_t *&block,
       mach_read_from_2(block->page.frame + offset + TRX_UNDO_NEXT_LOG))
     return nullptr;
 
-  uint32_t next= flst_get_next_addr(TRX_UNDO_PAGE_HDR + TRX_UNDO_PAGE_NODE +
-                                    block->page.frame).page;
+  uint32_t next= mach_read_from_4(TRX_UNDO_PAGE_HDR + TRX_UNDO_PAGE_NODE +
+                                  FLST_NEXT + FIL_ADDR_PAGE +
+                                  block->page.frame);
   if (next == FIL_NULL)
     return nullptr;
 
