@@ -15182,7 +15182,6 @@ ha_innobase::check(
 	THD*		thd,		/*!< in: user thread handle */
 	HA_CHECK_OPT*	check_opt)	/*!< in: check options */
 {
-	dict_index_t*	index;
 	ulint		n_rows;
 	ulint		n_rows_in_table	= ULINT_UNDEFINED;
 	bool		is_ok		= true;
@@ -15223,21 +15222,6 @@ ha_innobase::check(
 
 	m_prebuilt->trx->op_info = "checking table";
 
-	if (m_prebuilt->table->corrupted) {
-		push_warning_printf(m_user_thd,
-				    Sql_condition::WARN_LEVEL_WARN,
-				    HA_ERR_INDEX_CORRUPT,
-				    "InnoDB: Index %s is marked as"
-				    " corrupted",
-				    index->name());
-
-		/* Now that the table is already marked as corrupted,
-		there is no need to check any index of this table */
-		m_prebuilt->trx->op_info = "";
-
-		DBUG_RETURN(HA_ADMIN_CORRUPT);
-	}
-
 	uint old_isolation_level = m_prebuilt->trx->isolation_level;
 
 	/* We must run the index record counts at an isolation level
@@ -15248,10 +15232,9 @@ ha_innobase::check(
 		? TRX_ISO_READ_UNCOMMITTED
 		: TRX_ISO_REPEATABLE_READ;
 
-	ut_ad(!m_prebuilt->table->corrupted);
-
-	for (index = dict_table_get_first_index(m_prebuilt->table);
-	     index != NULL;
+	for (dict_index_t* index
+	     = dict_table_get_first_index(m_prebuilt->table);
+	     index;
 	     index = dict_table_get_next_index(index)) {
 		/* If this is an index being created or dropped, skip */
 		if (!index->is_committed()) {
