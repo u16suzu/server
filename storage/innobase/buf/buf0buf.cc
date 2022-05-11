@@ -2854,12 +2854,10 @@ re_evict:
 	load the block but block is already in free state. Handle the said case
 	with mode = BUF_PEEK_IF_IN_POOL that is invoked from
 	"btr_search_drop_page_hash_when_freed". */
-	ut_ad(mode == BUF_GET_POSSIBLY_FREED || mode == BUF_PEEK_IF_IN_POOL
-	      || state > buf_page_t::UNFIXED);
 
-	const bool not_first_access = block->page.set_accessed();
-
-	if (mode != BUF_PEEK_IF_IN_POOL) {
+	if (mode != BUF_GET_POSSIBLY_FREED && mode != BUF_PEEK_IF_IN_POOL) {
+		ut_ad(state > buf_page_t::UNFIXED);
+		const bool not_first_access = block->page.set_accessed();
 		buf_page_make_young_if_needed(&block->page);
 		if (!not_first_access) {
 			buf_read_ahead_linear(page_id, block->zip_size(),
@@ -3596,10 +3594,6 @@ database_corrupted:
 
     if (!srv_force_recovery)
     {
-      /* If the corruption is in the system tablespace, we will
-      intentionally crash the server. */
-      if (expected_id.space() == TRX_SYS_SPACE)
-        ib::fatal() << "Aborting because of a corrupt database page.";
       buf_pool.corrupted_evict(this);
       return err;
     }
@@ -3612,8 +3606,6 @@ database_corrupted:
   {
 release_page:
     buf_pool.corrupted_evict(this);
-    if (recv_recovery_is_on())
-      recv_sys.free_corrupted_page(expected_id);
     return err;
   }
 

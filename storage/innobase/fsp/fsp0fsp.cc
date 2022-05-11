@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1995, 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2017, 2021, MariaDB Corporation.
+Copyright (c) 2017, 2022, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -41,11 +41,17 @@ Created 11/29/1995 Heikki Tuuri
 #include "log0log.h"
 #include "dict0mem.h"
 #include "fsp0types.h"
-
-// JAN: MySQL 5.7 Encryption
-// #include <my_aes.h>
+#include "log.h"
 
 typedef uint32_t page_no_t;
+
+static ATTRIBUTE_COLD void fsp_metadata_corrupted(const fil_space_t &space)
+{
+  sql_print_error("InnoDB: Allocation metadata for file '%s' is corrupted",
+                  space.chain.start->name);
+  DBUG_EXECUTE_IF("intermittent_read_failure", return;);
+  ut_ad("corruption" == 0);
+}
 
 /** Return an extent to the free list of a space.
 @param[in,out]	space		tablespace
@@ -897,6 +903,7 @@ fsp_fill_free_list(
 		xdes_t*	descr = xdes_get_descriptor_with_space_hdr(
 			header, space, i, mtr, &xdes, init_space);
 		if (!descr) {
+			DBUG_EXECUTE_IF("intermittent_read_failure", return;);
 			ut_ad("corruption" == 0);
 			return;
 		}
@@ -957,14 +964,14 @@ fsp_alloc_free_extent(
 
 	buf_block_t* header = fsp_get_header(space, mtr);
 	if (!header) {
-		ut_ad("corruption" == 0);
+		fsp_metadata_corrupted(*space);
 		return nullptr;
 	}
 
 	descr = xdes_get_descriptor_with_space_hdr(
 		header, space, hint, mtr, &desc_block);
 	if (!descr) {
-		ut_ad("corruption" == 0);
+		fsp_metadata_corrupted(*space);
 		return nullptr;
 	}
 
@@ -992,6 +999,8 @@ fsp_alloc_free_extent(
 		descr = xdes_lst_get_descriptor(*space, first, mtr,
 						&desc_block);
 		if (!descr) {
+			DBUG_EXECUTE_IF("intermittent_read_failure",
+					return nullptr;);
 			ut_ad("corruption" == 0);
 			return nullptr;
 		}
@@ -1150,6 +1159,8 @@ fsp_alloc_free_page(
 			descr = xdes_lst_get_descriptor(*space, first, mtr,
 							&xdes);
 			if (!descr) {
+				DBUG_EXECUTE_IF("intermittent_read_failure",
+						return nullptr;);
 				ut_ad("corruption" == 0);
 				return nullptr;
 			}
@@ -1164,10 +1175,7 @@ fsp_alloc_free_page(
 
 	uint32_t free = xdes_find_free(descr, hint % FSP_EXTENT_SIZE);
 	if (free == FIL_NULL) {
-		ib::error() << "Allocation metadata for file '"
-			    << space->chain.start->name
-			    << "' is corrupted";
-		ut_ad("corruption" == 0);
+		fsp_metadata_corrupted(*space);
 		return nullptr;
 	}
 
@@ -1699,8 +1707,9 @@ fseg_create(fil_space_t *space, ulint byte_offset, mtr_t *mtr,
 
 	buf_block_t* header = fsp_get_header(space, mtr);
 	if (!header) {
-		ut_ad("corruption" == 0);
 		block = nullptr;
+		DBUG_EXECUTE_IF("intermittent_read_failure", goto funct_exit;);
+		ut_ad("corruption" == 0);
 		goto funct_exit;
 	}
 
@@ -1927,10 +1936,7 @@ fseg_alloc_free_extent(
 
 		descr = xdes_lst_get_descriptor(*space, first, mtr, xdes);
 		if (UNIV_UNLIKELY(!descr)) {
-			ib::error() << "Allocation metadata for file '"
-				    << space->chain.start->name
-				    << "' is corrupted";
-			ut_ad("corruption" == 0);
+			fsp_metadata_corrupted(*space);
 			return nullptr;
 		}
 	} else {
@@ -2015,6 +2021,7 @@ fseg_alloc_free_page_low(
 
 	buf_block_t* header = fsp_get_header(space, mtr);
 	if (!header) {
+		DBUG_EXECUTE_IF("intermittent_read_failure", return nullptr;);
 		ut_ad("corruption" == 0);
 		return nullptr;
 	}
@@ -2058,6 +2065,8 @@ take_hinted_page:
 		ret_descr = fsp_alloc_free_extent(space, hint, &xdes, mtr);
 
 		if (UNIV_UNLIKELY(ret_descr != descr)) {
+			DBUG_EXECUTE_IF("intermittent_read_failure",
+					return nullptr;);
 			ut_ad("corruption" == 0);
 			return nullptr;
 		}
@@ -2131,10 +2140,7 @@ take_hinted_page:
 
 		ret_descr = xdes_lst_get_descriptor(*space, first, mtr, &xdes);
 		if (!ret_descr) {
-			ib::error() << "Allocation metadata for file '"
-				    << space->chain.start->name
-				    << "' is corrupted";
-			ut_ad("corruption" == 0);
+			fsp_metadata_corrupted(*space);
 			return nullptr;
 		}
 
@@ -2401,7 +2407,9 @@ fsp_reserve_free_extents(
 
 	buf_block_t* header = fsp_get_header(space, mtr);
 	if (!header) {
+		DBUG_EXECUTE_IF("intermittent_read_failure", return false;);
 		ut_ad("corruption" == 0);
+		return false;
 	}
 try_again:
 	uint32_t size = mach_read_from_4(FSP_HEADER_OFFSET + FSP_SIZE

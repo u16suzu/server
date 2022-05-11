@@ -400,9 +400,12 @@ next_page:
                             physical_size, read_buf);
 
     if (UNIV_UNLIKELY(fio.err != DB_SUCCESS))
+    {
        ib::warn() << "Double write buffer recovery: " << page_id
                   << " ('" << space->chain.start->name
                   << "') read failed with error: " << fio.err;
+       continue;
+    }
 
     if (buf_is_zeroes(span<const byte>(read_buf, physical_size)))
     {

@@ -1440,8 +1440,6 @@ fil_write_flushed_lsn(
 		fio = fil_system.sys_space->io(IORequestWrite,
 					       0, srv_page_size, buf);
 		fil_flush_file_spaces();
-	} else {
-		fil_system.sys_space->release();
 	}
 
 	aligned_free(buf);

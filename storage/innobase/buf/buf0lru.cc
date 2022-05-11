@@ -1238,6 +1238,8 @@ ATTRIBUTE_COLD void buf_pool_t::corrupted_evict(buf_page_t *bpage)
 
   ut_d(auto n=) n_pend_reads--;
   ut_ad(n > 0);
+
+  recv_sys.free_corrupted_page(id);
 }
 
 /** Update buf_pool.LRU_old_ratio.

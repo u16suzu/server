@@ -2858,6 +2858,9 @@ This function should only be called when innodb_force_recovery is set.
 @param page_id  corrupted page identifier */
 ATTRIBUTE_COLD void recv_sys_t::free_corrupted_page(page_id_t page_id)
 {
+  if (!recovery_on)
+    return;
+
   mysql_mutex_lock(&mutex);
   map::iterator p= pages.find(page_id);
   if (p != pages.end())
@@ -2865,7 +2868,9 @@ ATTRIBUTE_COLD void recv_sys_t::free_corrupted_page(page_id_t page_id)
     p->second.log.clear();
     pages.erase(p);
   }
-  if (pages.empty())
+  if (!srv_force_recovery)
+    set_corrupt_fs();
+  else if (pages.empty())
     pthread_cond_broadcast(&cond);
   mysql_mutex_unlock(&mutex);
 }

@@ -393,7 +393,6 @@ ibuf_init_at_db_start(void)
 /*=======================*/
 {
 	page_t*		root;
-	ulint		n_used;
 
 	ut_ad(!ibuf.index);
 	mtr_t mtr;
@@ -428,11 +427,12 @@ err_exit:
 
 	fseg_n_reserved_pages(*header_page,
 			      IBUF_HEADER + IBUF_TREE_SEG_HEADER
-			      + header_page->page.frame, &n_used, &mtr);
+			      + header_page->page.frame, &ibuf.seg_size, &mtr);
 
-	ut_ad(n_used >= 2);
-
-	ibuf.seg_size = n_used;
+	do {
+		DBUG_EXECUTE_IF("intermittent_read_failure", continue;);
+		ut_ad(ibuf.seg_size >= 2);
+	} while (0);
 
 	if (buf_block_t* block =
 	    buf_page_get_gen(page_id_t(IBUF_SPACE_ID,
@@ -4660,6 +4660,7 @@ dberr_t ibuf_check_bitmap_on_import(const trx_t* trx, fil_space_t* space)
 			page_id_t(space->id, page_no), zip_size, &mtr);
 		if (!bitmap_page) {
 			mysql_mutex_unlock(&ibuf_mutex);
+			ibuf_exit(&mtr);
 			mtr.commit();
 			return DB_CORRUPTION;
 		}
