@@ -701,6 +701,8 @@ handle_new_error:
 		trx->rollback();
 		break;
 
+	case DB_IO_ERROR:
+	case DB_TABLE_CORRUPT:
 	case DB_CORRUPTION:
 	case DB_PAGE_CORRUPTED:
 		ib::error() << "We detected index corruption in an InnoDB type"
