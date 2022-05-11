@@ -4291,16 +4291,11 @@ FTS auxiliary INDEX table and clear the cache at the end.
 @return DB_SUCCESS on success, error code on failure. */
 dberr_t fts_sync_table(dict_table_t* table, bool wait)
 {
-	dberr_t	err = DB_SUCCESS;
+  ut_ad(table->fts);
 
-	ut_ad(table->fts);
-
-	if (table->space && table->fts->cache
-	    && !dict_table_is_corrupted(table)) {
-		err = fts_sync(table->fts->cache->sync, !wait, wait);
-	}
-
-	return(err);
+  return table->space && !table->corrupted && table->fts->cache
+    ? fts_sync(table->fts->cache->sync, !wait, wait)
+    : DB_SUCCESS;
 }
 
 /** Check if a fts token is a stopword or less than fts_min_token_size

@@ -1986,7 +1986,7 @@ dict_load_indexes(
 		if (ignore_err != DICT_ERR_IGNORE_DROP
 		    && index->is_corrupted() && index->is_clust()) {
 			dict_mem_index_free(index);
-			error = DB_INDEX_CORRUPT;
+			error = DB_TABLE_CORRUPT;
 			goto func_exit;
 		}
 
@@ -2370,7 +2370,7 @@ evict:
 
 	err = dict_load_indexes(table, heap, index_load_err);
 
-	if (err == DB_INDEX_CORRUPT || !UT_LIST_GET_FIRST(table->indexes)) {
+	if (err == DB_TABLE_CORRUPT) {
 		/* Refuse to load the table if the table has a corrupted
 		cluster index */
 		ut_ad(index_load_err != DICT_ERR_IGNORE_DROP);
@@ -2387,7 +2387,7 @@ evict:
 corrupted:
 			table->corrupted = true;
 			table->file_unreadable = true;
-			err = DB_CORRUPTION;
+			err = DB_TABLE_CORRUPT;
 		} else if (table->space->id
 			   && ignore_err == DICT_ERR_IGNORE_DROP) {
 			/* Do not bother to load data from .ibd files

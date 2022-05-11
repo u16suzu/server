@@ -194,7 +194,7 @@ static void dict_stats_process_entry_from_defrag_pool(THD *thd)
   {
     if (dict_index_t *index= !table->corrupted
         ? dict_table_find_index_on_id(table, index_id) : nullptr)
-      if (!index->is_corrupted())
+      if (index->is_btree())
         dict_stats_save_defrag_stats(index);
     dict_table_close(table, false, thd, mdl);
   }

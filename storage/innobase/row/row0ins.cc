@@ -3573,8 +3573,7 @@ row_ins(
 
 	ut_ad(node->state == INS_NODE_INSERT_ENTRIES);
 
-	while (node->index != NULL) {
-		dict_index_t *index = node->index;
+	while (dict_index_t *index = node->index) {
 		/*
 		   We do not insert history rows into FTS_DOC_ID_INDEX because
 		   it is unique by FTS_DOC_ID only and we do not want to add
@@ -3583,7 +3582,7 @@ row_ins(
 		   FTS_DOC_ID for history is enough.
 		*/
 		const unsigned type = index->type;
-		if (index->type & DICT_FTS
+		if (index->type & (DICT_FTS | DICT_CORRUPT)
 		    || !index->is_committed()) {
 		} else if (!(type & DICT_UNIQUE) || index->n_uniq > 1
 			   || !node->vers_history_row()) {
@@ -3604,12 +3603,6 @@ row_ins(
 
 		node->index = dict_table_get_next_index(node->index);
 		++node->entry;
-
-		/* Skip corrupted secondary index and its entry */
-		while (node->index && node->index->is_corrupted()) {
-			node->index = dict_table_get_next_index(node->index);
-			++node->entry;
-		}
 	}
 
 	ut_ad(node->entry == node->entry_list.end());

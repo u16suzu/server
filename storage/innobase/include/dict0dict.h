@@ -638,19 +638,6 @@ dict_table_get_next_index(
 # define dict_table_get_next_index(index) UT_LIST_GET_NEXT(indexes, index)
 #endif /* UNIV_DEBUG */
 
-/* Skip corrupted index */
-#define dict_table_skip_corrupt_index(index)			\
-	while (index && index->is_corrupted()) {		\
-		index = dict_table_get_next_index(index);	\
-	}
-
-/* Get the next non-corrupt index */
-#define dict_table_next_uncorrupted_index(index)		\
-do {								\
-	index = dict_table_get_next_index(index);		\
-	dict_table_skip_corrupt_index(index);			\
-} while (0)
-
 #define dict_index_is_clust(index) (index)->is_clust()
 #define dict_index_is_auto_gen_clust(index) (index)->is_gen_clust()
 #define dict_index_is_unique(index) (index)->is_unique()
@@ -1673,22 +1660,11 @@ dict_fs2utf8(
 	size_t		table_utf8_size)/*!< in: table_utf8 size */
 	MY_ATTRIBUTE((nonnull));
 
-/**********************************************************************//**
-Check whether the table is corrupted.
-@return nonzero for corrupted table, zero for valid tables */
-UNIV_INLINE
-ulint
-dict_table_is_corrupted(
-/*====================*/
-	const dict_table_t*	table)	/*!< in: table */
-	MY_ATTRIBUTE((nonnull, warn_unused_result));
-
-/** Flag an index and table corrupted both in the data dictionary cache
+/** Flag an index corrupted both in the data dictionary cache
 and in the system table SYS_INDEXES.
 @param index       index to be flagged as corrupted
-@param ctx         context (for error log reporting)
-@param dict_locked whether dict_sys.latch is held in exclusive mode */
-void dict_set_corrupted(dict_index_t *index, const char *ctx, bool dict_locked)
+@param ctx         context (for error log reporting) */
+void dict_set_corrupted(dict_index_t *index, const char *ctx)
   ATTRIBUTE_COLD __attribute__((nonnull));
 
 /** Sets merge_threshold in the SYS_INDEXES

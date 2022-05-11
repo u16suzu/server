@@ -167,10 +167,7 @@ dict_stats_should_ignore_index(
 /*===========================*/
 	const dict_index_t*	index)	/*!< in: index */
 {
-	return((index->type & (DICT_FTS | DICT_SPATIAL))
-	       || index->is_corrupted()
-	       || index->to_be_dropped
-	       || !index->is_committed());
+  return !index->is_btree() || index->to_be_dropped || !index->is_committed();
 }
 
 

@@ -3752,8 +3752,7 @@ row_log_apply(
 
 	index->lock.x_lock(SRW_LOCK_CALL);
 
-	if (!dict_table_is_corrupted(index->table)
-	    && index->online_log) {
+	if (index->online_log && !index->table->corrupted) {
 		error = row_log_apply_ops(trx, index, &dup, stage);
 	} else {
 		error = DB_SUCCESS;

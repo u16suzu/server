@@ -4105,7 +4105,7 @@ dict_print_info_on_foreign_keys(
 /**********************************************************************//**
 Flags an index corrupted both in the data dictionary cache
 and in the SYS_INDEXES */
-void dict_set_corrupted(dict_index_t *index, const char *ctx, bool dict_locked)
+void dict_set_corrupted(dict_index_t *index, const char *ctx)
 {
 	mem_heap_t*	heap;
 	mtr_t		mtr;
@@ -4116,11 +4116,8 @@ void dict_set_corrupted(dict_index_t *index, const char *ctx, bool dict_locked)
 	const char*	status;
 	btr_cur_t	cursor;
 
-	if (!dict_locked) {
-		dict_sys.lock(SRW_LOCK_CALL);
-	}
+	dict_sys.lock(SRW_LOCK_CALL);
 
-	ut_ad(dict_sys.locked());
 	ut_ad(!dict_table_is_comp(dict_sys.sys_tables));
 	ut_ad(!dict_table_is_comp(dict_sys.sys_indexes));
 
@@ -4128,6 +4125,7 @@ void dict_set_corrupted(dict_index_t *index, const char *ctx, bool dict_locked)
 	is corrupted */
 	if (dict_index_is_clust(index)) {
 		index->table->corrupted = TRUE;
+		goto func_exit;
 	}
 
 	if (index->type & DICT_CORRUPT) {
@@ -4195,9 +4193,7 @@ fail:
 		<< " in table " << index->table->name << " in " << ctx;
 
 func_exit:
-	if (!dict_locked) {
-		dict_sys.unlock();
-	}
+	dict_sys.unlock();
 }
 
 /** Sets merge_threshold in the SYS_INDEXES

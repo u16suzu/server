@@ -15070,15 +15070,8 @@ inline int ha_innobase::defragment_table()
   for (dict_index_t *index= dict_table_get_first_index(m_prebuilt->table);
        index; index= dict_table_get_next_index(index))
   {
-    if (index->is_corrupted() || index->is_spatial())
+    if (!index->is_btree())
       continue;
-
-    if (index->page == FIL_NULL)
-    {
-      /* Do not defragment auxiliary tables related to FULLTEXT INDEX. */
-      ut_ad(index->type & DICT_FTS);
-      continue;
-    }
 
     if (btr_defragment_find_index(index))
     {
@@ -15231,15 +15224,6 @@ ha_innobase::check(
 	m_prebuilt->trx->op_info = "checking table";
 
 	if (m_prebuilt->table->corrupted) {
-		/* If some previous operation has marked the table as
-		corrupted in memory, and has not propagated such to
-		clustered index, we will do so here */
-		index = dict_table_get_first_index(m_prebuilt->table);
-
-		if (!index->is_corrupted()) {
-			dict_set_corrupted(index, "CHECK TABLE", false);
-		}
-
 		push_warning_printf(m_user_thd,
 				    Sql_condition::WARN_LEVEL_WARN,
 				    HA_ERR_INDEX_CORRUPT,
@@ -15307,8 +15291,7 @@ ha_innobase::check(
 			if (!index->is_primary()) {
 				m_prebuilt->index_usable = FALSE;
 				dict_set_corrupted(index,
-						   "dict_set_index_corrupted",
-						   false);
+						   "dict_set_index_corrupted");
 			});
 
 		if (UNIV_UNLIKELY(!m_prebuilt->index_usable)) {
@@ -15370,8 +15353,7 @@ ha_innobase::check(
 				" index %s is corrupted.",
 				index->name());
 			is_ok = false;
-			dict_set_corrupted(index, "CHECK TABLE-check index",
-					   false);
+			dict_set_corrupted(index, "CHECK TABLE-check index");
 		}
 
 
@@ -15386,8 +15368,7 @@ ha_innobase::check(
 				" entries, should be " ULINTPF ".",
 				index->name(), n_rows, n_rows_in_table);
 			is_ok = false;
-			dict_set_corrupted(index, "CHECK TABLE; Wrong count",
-					   false);
+			dict_set_corrupted(index, "CHECK TABLE; Wrong count");
 		}
 	}
 

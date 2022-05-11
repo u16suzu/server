@@ -853,12 +853,11 @@ row_undo_mod_upd_del_sec(
 
 	heap = mem_heap_create(1024);
 
-	while (node->index != NULL) {
-		dict_index_t*	index	= node->index;
-		dtuple_t*	entry;
+	do {
+		dict_index_t* index = node->index;
 
-		if (index->type & DICT_FTS || !index->is_committed()) {
-			dict_table_next_uncorrupted_index(node->index);
+		if (index->type & (DICT_FTS | DICT_CORRUPT)
+		    || !index->is_committed()) {
 			continue;
 		}
 
@@ -869,7 +868,7 @@ row_undo_mod_upd_del_sec(
 		time when the undo log record was written. When we get
 		to roll back an undo log entry TRX_UNDO_DEL_MARK_REC,
 		it should always cover all affected indexes. */
-		entry = row_build_index_entry(
+		dtuple_t* entry = row_build_index_entry(
 			node->row, node->ext, index, heap);
 
 		if (UNIV_UNLIKELY(!entry)) {
@@ -894,8 +893,7 @@ row_undo_mod_upd_del_sec(
 		}
 
 		mem_heap_empty(heap);
-		dict_table_next_uncorrupted_index(node->index);
-	}
+	} while ((node->index = dict_table_get_next_index(node->index)));
 
 	mem_heap_free(heap);
 
@@ -919,12 +917,11 @@ row_undo_mod_del_mark_sec(
 
 	heap = mem_heap_create(1024);
 
-	while (node->index != NULL) {
-		dict_index_t*	index	= node->index;
-		dtuple_t*	entry;
+	do {
+		dict_index_t* index = node->index;
 
-		if (index->type == DICT_FTS || !index->is_committed()) {
-			dict_table_next_uncorrupted_index(node->index);
+		if (index->type & (DICT_FTS | DICT_CORRUPT)
+		    || !index->is_committed()) {
 			continue;
 		}
 
@@ -935,7 +932,7 @@ row_undo_mod_del_mark_sec(
 		time when the undo log record was written. When we get
 		to roll back an undo log entry TRX_UNDO_DEL_MARK_REC,
 		it should always cover all affected indexes. */
-		entry = row_build_index_entry(
+		dtuple_t* entry = row_build_index_entry(
 			node->row, node->ext, index, heap);
 
 		ut_a(entry);
@@ -961,8 +958,7 @@ row_undo_mod_del_mark_sec(
 		}
 
 		mem_heap_empty(heap);
-		dict_table_next_uncorrupted_index(node->index);
-	}
+	} while ((node->index = dict_table_get_next_index(node->index)));
 
 	mem_heap_free(heap);
 
@@ -979,54 +975,33 @@ row_undo_mod_upd_exist_sec(
 	undo_node_t*	node,	/*!< in: row undo node */
 	que_thr_t*	thr)	/*!< in: query thread */
 {
-	mem_heap_t*	heap;
-	dberr_t		err	= DB_SUCCESS;
-
-	if (node->index == NULL
-	    || ((node->cmpl_info & UPD_NODE_NO_ORD_CHANGE))) {
-		/* No change in secondary indexes */
-
-		return(err);
+	if (node->cmpl_info & UPD_NODE_NO_ORD_CHANGE) {
+		return DB_SUCCESS;
 	}
 
-	heap = mem_heap_create(1024);
+	mem_heap_t* heap = mem_heap_create(1024);
+	dberr_t err = DB_SUCCESS;
 
+	do {
+		dict_index_t* index = node->index;
 
-	while (node->index != NULL) {
-
-		if (!node->index->is_committed()) {
-			dict_table_next_uncorrupted_index(node->index);
+		if (index->type & (DICT_FTS | DICT_CORRUPT)
+		    || !index->is_committed()) {
 			continue;
 		}
 
-		dict_index_t*	index	= node->index;
-		dtuple_t*	entry;
-
-		if (dict_index_is_spatial(index)) {
-			if (!row_upd_changes_ord_field_binary_func(
-				index, node->update,
+		if (!row_upd_changes_ord_field_binary_func(
+			index, node->update,
 #ifdef UNIV_DEBUG
-				thr,
+			thr,
 #endif /* UNIV_DEBUG */
-                                node->row,
-				node->ext, ROW_BUILD_FOR_UNDO)) {
-				dict_table_next_uncorrupted_index(node->index);
-				continue;
-			}
-		} else {
-			if (index->type == DICT_FTS
-			    || !row_upd_changes_ord_field_binary(index,
-								 node->update,
-								 thr, node->row,
-								 node->ext)) {
-				dict_table_next_uncorrupted_index(node->index);
-				continue;
-			}
+			node->row, node->ext, ROW_BUILD_FOR_UNDO)) {
+			continue;
 		}
 
 		/* Build the newest version of the index entry */
-		entry = row_build_index_entry(node->row, node->ext,
-					      index, heap);
+		dtuple_t* entry = row_build_index_entry(
+			node->row, node->ext, index, heap);
 		if (UNIV_UNLIKELY(!entry)) {
 			/* The server must have crashed in
 			row_upd_clust_rec_by_insert() before
@@ -1078,17 +1053,10 @@ row_undo_mod_upd_exist_sec(
 		the secondary index record if we updated its fields
 		but alphabetically they stayed the same, e.g.,
 		'abc' -> 'aBc'. */
-		if (dict_index_is_spatial(index)) {
-			entry = row_build_index_entry_low(node->undo_row,
-							  node->undo_ext,
-							  index, heap,
-							  ROW_BUILD_FOR_UNDO);
-		} else {
-			entry = row_build_index_entry(node->undo_row,
-						      node->undo_ext,
-						      index, heap);
-		}
-
+		entry = row_build_index_entry_low(node->undo_row,
+						  node->undo_ext,
+						  index, heap,
+						  ROW_BUILD_FOR_UNDO);
 		ut_a(entry);
 
 		err = row_undo_mod_del_unmark_sec_and_undo_update(
@@ -1106,8 +1074,7 @@ row_undo_mod_upd_exist_sec(
 		}
 
 		mem_heap_empty(heap);
-		dict_table_next_uncorrupted_index(node->index);
-	}
+	} while ((node->index = dict_table_get_next_index(node->index)));
 
 	mem_heap_free(heap);
 
@@ -1253,7 +1220,7 @@ row_undo_mod(
 	undo_node_t*	node,	/*!< in: row undo node */
 	que_thr_t*	thr)	/*!< in: query thread */
 {
-	dberr_t	err;
+	dberr_t	err = DB_SUCCESS;
 	ut_ad(thr_get_trx(thr) == node->trx);
 	const bool dict_locked = node->trx->dict_operation_lock_mode;
 
@@ -1273,23 +1240,20 @@ row_undo_mod(
 
 	/* Skip the clustered index (the first index) */
 	node->index = dict_table_get_next_index(node->index);
-
-	/* Skip all corrupted secondary index */
-	dict_table_skip_corrupt_index(node->index);
-
-	switch (node->rec_type) {
-	case TRX_UNDO_UPD_EXIST_REC:
-		err = row_undo_mod_upd_exist_sec(node, thr);
-		break;
-	case TRX_UNDO_DEL_MARK_REC:
-		err = row_undo_mod_del_mark_sec(node, thr);
-		break;
-	case TRX_UNDO_UPD_DEL_REC:
-		err = row_undo_mod_upd_del_sec(node, thr);
-		break;
-	default:
-		ut_error;
-		err = DB_ERROR;
+	if (node->index) {
+		switch (node->rec_type) {
+		case TRX_UNDO_UPD_EXIST_REC:
+			err = row_undo_mod_upd_exist_sec(node, thr);
+			break;
+		case TRX_UNDO_DEL_MARK_REC:
+			err = row_undo_mod_del_mark_sec(node, thr);
+			break;
+		case TRX_UNDO_UPD_DEL_REC:
+			err = row_undo_mod_upd_del_sec(node, thr);
+			break;
+		default:
+			MY_ASSERT_UNREACHABLE();
+		}
 	}
 
 	if (err == DB_SUCCESS) {

@@ -409,7 +409,7 @@ btr_defragment_merge_pages(
 		    || btr_cur_node_ptr_delete(&parent, mtr)
 		    != DB_SUCCESS) {
 corrupted:
-			dict_set_corrupted(index, "defragment", false);
+			dict_set_corrupted(index, "defragment");
 			return nullptr;
 		}
 		btr_page_free(index, from_block, mtr);

@@ -507,16 +507,15 @@ row_undo_ins_remove_sec_rec(
 	que_thr_t*	thr)	/*!< in: query thread */
 {
 	dberr_t		err	= DB_SUCCESS;
-	dict_index_t*	index	= node->index;
+	dict_index_t*	index;
 	mem_heap_t*	heap;
 
 	heap = mem_heap_create(1024);
 
-	while (index != NULL) {
-		dtuple_t*	entry;
-
-		if (index->type & DICT_FTS || !index->is_committed()) {
-			dict_table_next_uncorrupted_index(index);
+	for (index = node->index; index;
+             index = dict_table_get_next_index(index)) {
+		if (index->type & (DICT_FTS | DICT_CORRUPT)
+		    || !index->is_committed()) {
 			continue;
 		}
 
@@ -524,7 +523,7 @@ row_undo_ins_remove_sec_rec(
 		always contain all fields of the index. It does not
 		matter if any indexes were created afterwards; all
 		index entries can be reconstructed from the row. */
-		entry = row_build_index_entry(
+		dtuple_t* entry = row_build_index_entry(
 			node->row, node->ext, index, heap);
 		if (UNIV_UNLIKELY(!entry)) {
 			/* The database must have crashed after
@@ -547,7 +546,6 @@ row_undo_ins_remove_sec_rec(
 		}
 
 		mem_heap_empty(heap);
-		dict_table_next_uncorrupted_index(index);
 	}
 
 func_exit:
@@ -591,8 +589,6 @@ row_undo_ins(
 	case TRX_UNDO_INSERT_REC:
 		/* Skip the clustered index (the first index) */
 		node->index = dict_table_get_next_index(node->index);
-
-		dict_table_skip_corrupt_index(node->index);
 
 		err = row_undo_ins_remove_sec_rec(node, thr);
 

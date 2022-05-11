@@ -1250,30 +1250,19 @@ row_insert_for_mysql(
 	ut_a(prebuilt->magic_n == ROW_PREBUILT_ALLOCATED);
 	ut_a(prebuilt->magic_n2 == ROW_PREBUILT_ALLOCATED);
 
-	if (!prebuilt->table->space) {
-
-		ib::error() << "The table " << prebuilt->table->name
+	if (!table->space) {
+		ib::error() << "The table " << table->name
 			<< " doesn't have a corresponding tablespace, it was"
 			" discarded.";
 
 		return(DB_TABLESPACE_DELETED);
-
-	} else if (!prebuilt->table->is_readable()) {
-		return(row_mysql_get_table_status(prebuilt->table, trx, true));
+	} else if (!table->is_readable()) {
+		return row_mysql_get_table_status(table, trx, true);
 	} else if (high_level_read_only) {
 		return(DB_READ_ONLY);
-	}
-
-	DBUG_EXECUTE_IF("mark_table_corrupted", {
-		/* Mark the table corrupted for the clustered index */
-		dict_index_t*	index = dict_table_get_first_index(table);
-		ut_ad(dict_index_is_clust(index));
-		dict_set_corrupted(index, "INSERT TABLE", false); });
-
-	if (dict_table_is_corrupted(table)) {
-
-		ib::error() << "Table " << table->name << " is corrupt.";
-		return(DB_TABLE_CORRUPT);
+	} else if (UNIV_UNLIKELY(table->corrupted)
+		   || dict_table_get_first_index(table)->is_corrupted()) {
+		return DB_TABLE_CORRUPT;
 	}
 
 	trx->op_info = "inserting";
