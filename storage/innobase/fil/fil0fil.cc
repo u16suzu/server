@@ -2827,13 +2827,18 @@ fil_io_t fil_space_t::io(const IORequest &type, os_offset_t offset, size_t len,
 
 	fil_node_t* node= UT_LIST_GET_FIRST(chain);
 	ut_ad(node);
+	ulint p = static_cast<ulint>(offset >> srv_page_size_shift);
+	dberr_t err;
 
 	if (type.type == IORequest::READ_ASYNC && is_stopping()) {
-		release();
-		return {DB_TABLESPACE_DELETED, nullptr};
+		err = DB_TABLESPACE_DELETED;
+		node = nullptr;
+		goto release;
 	}
 
-	ulint p = static_cast<ulint>(offset >> srv_page_size_shift);
+	DBUG_EXECUTE_IF("intermittent_read_failure",
+			if (type.is_read() && !(~get_rnd_value() & 0x3ff0))
+			goto io_error;);
 
 	if (UNIV_LIKELY_NULL(UT_LIST_GET_NEXT(chain, node))) {
 		ut_ad(this == fil_system.sys_space
@@ -2845,14 +2850,18 @@ fil_io_t fil_space_t::io(const IORequest &type, os_offset_t offset, size_t len,
 			node = UT_LIST_GET_NEXT(chain, node);
 			if (!node) {
 fail:
-				release();
 				if (type.type != IORequest::READ_ASYNC) {
 					fil_invalid_page_access_msg(
 						node->name,
 						offset, len,
 						type.is_read());
 				}
-				return {DB_IO_ERROR, nullptr};
+#ifndef DBUG_OFF
+io_error:
+#endif
+				err = DB_IO_ERROR;
+				node = nullptr;
+				goto release;
 			}
 		}
 
@@ -2862,8 +2871,6 @@ fail:
 	if (UNIV_UNLIKELY(node->size <= p)) {
 		goto fail;
 	}
-
-	dberr_t err;
 
 	if (type.type == IORequest::PUNCH_RANGE) {
 		err = os_file_punch_hole(node->handle, offset, len);
@@ -2890,12 +2897,14 @@ release_sync_write:
 			node->complete_write();
 release:
 			release();
+			goto func_exit;
 		}
 		ut_ad(fil_validate_skip());
 	}
 	if (err != DB_SUCCESS) {
 		goto release;
 	}
+func_exit:
 	return {err, node};
 }
 
