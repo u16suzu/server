@@ -5929,8 +5929,11 @@ func_exit:
 
 		/* Ensure that the root page is in the correct format. */
 		buf_block_t* root = btr_root_block_get(index, RW_X_LATCH,
-						       &mtr);
-		DBUG_ASSERT(root);
+						       &mtr, &err);
+		if (UNIV_UNLIKELY(!root)) {
+			goto func_exit;
+		}
+
 		if (fil_page_get_type(root->page.frame)
 		    != FIL_PAGE_TYPE_INSTANT) {
 			DBUG_ASSERT("wrong page type" == 0);
@@ -6021,10 +6024,12 @@ empty_table:
 	mtr.commit();
 	mtr.start();
 	index->set_modified(mtr);
-	if (buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH, &mtr)) {
+	if (buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH, &mtr,
+						   &err)) {
 		if (fil_page_get_type(root->page.frame) != FIL_PAGE_INDEX) {
 			DBUG_ASSERT("wrong page type" == 0);
-			goto err_exit;
+			err = DB_CORRUPTION;
+			goto func_exit;
 		}
 
 		btr_set_instant(root, *index, &mtr);
@@ -6034,9 +6039,6 @@ empty_table:
 		err = row_ins_clust_index_entry_low(
 			BTR_NO_LOCKING_FLAG, BTR_MODIFY_TREE, index,
 			index->n_uniq, entry, 0, thr);
-	} else {
-err_exit:
-		err = DB_CORRUPTION;
 	}
 
 	goto func_exit;

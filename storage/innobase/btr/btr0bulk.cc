@@ -60,12 +60,11 @@ PageBulk::init()
 		alloc_mtr.start();
 		m_index->set_modified(alloc_mtr);
 
-		dberr_t err = DB_SUCCESS;
 		uint32_t n_reserved;
-		if (!fsp_reserve_free_extents(&n_reserved,
-					      m_index->table->space,
-					      1, FSP_NORMAL, &alloc_mtr)) {
-			err = DB_OUT_OF_FILE_SPACE;
+		dberr_t err = fsp_reserve_free_extents(
+			&n_reserved, m_index->table->space, 1, FSP_NORMAL,
+			&alloc_mtr);
+		if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
 oom:
 			alloc_mtr.commit();
 			m_mtr.commit();
@@ -1214,11 +1213,12 @@ err_exit:
 		root_page_bulk.finish();
 
 		/* Remove last page. */
-		btr_page_free(m_index, last_block, &mtr);
-
+		err = btr_page_free(m_index, last_block, &mtr);
 		mtr.commit();
 
-		err = pageCommit(&root_page_bulk, NULL, false);
+		if (dberr_t e = pageCommit(&root_page_bulk, NULL, false)) {
+			err = e;
+		}
 		ut_ad(err == DB_SUCCESS);
 	}
 

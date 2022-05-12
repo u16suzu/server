@@ -133,8 +133,8 @@ row_undo_mod_clust_low(
 		    && node->ref == &trx_undo_metadata
 		    && btr_cur_get_index(btr_cur)->table->instant
 		    && node->update->info_bits == REC_INFO_METADATA_ADD) {
-			btr_reset_instant(*btr_cur_get_index(btr_cur), false,
-					  mtr);
+			err = btr_reset_instant(*btr_cur_get_index(btr_cur),
+						false, mtr);
 		}
 	}
 

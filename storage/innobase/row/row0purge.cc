@@ -844,7 +844,9 @@ skip_secondaries:
 			latching order if we would only later latch the
 			root page of such a tree! */
 
-			if (!btr_root_block_get(index, RW_SX_LATCH, &mtr)) {
+			dberr_t err;
+			if (!btr_root_block_get(index, RW_SX_LATCH, &mtr,
+						&err)) {
 			} else if (buf_block_t* block =
 				   buf_page_get(page_id_t(rseg.space->id,
 							  page_no),

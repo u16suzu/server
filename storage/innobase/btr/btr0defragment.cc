@@ -406,13 +406,12 @@ btr_defragment_merge_pages(
 		btr_search_drop_page_hash_index(from_block);
 		if (btr_level_list_remove(*from_block, *index, mtr)
 		    != DB_SUCCESS
-		    || btr_cur_node_ptr_delete(&parent, mtr)
-		    != DB_SUCCESS) {
+		    || btr_cur_node_ptr_delete(&parent, mtr) != DB_SUCCESS
+		    || btr_page_free(index, from_block, mtr) != DB_SUCCESS) {
 corrupted:
 			dict_set_corrupted(index, "defragment");
 			return nullptr;
 		}
-		btr_page_free(index, from_block, mtr);
 	} else {
 		// There are still records left on the page, so
 		// increment n_defragmented. Node pointer will be changed

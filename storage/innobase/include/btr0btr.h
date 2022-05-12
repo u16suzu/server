@@ -265,6 +265,7 @@ btr_node_ptr_get_child_page_no(
 @param[in]	index_id		index id
 @param[in]	index			index, or NULL to create a system table
 @param[in,out]	mtr			mini-transaction
+@param[out]	err			error code
 @return	page number of the created root
 @retval	FIL_NULL	if did not succeed */
 uint32_t
@@ -273,7 +274,9 @@ btr_create(
 	fil_space_t*		space,
 	index_id_t		index_id,
 	dict_index_t*		index,
-	mtr_t*			mtr);
+	mtr_t*			mtr,
+        dberr_t*		err)
+	MY_ATTRIBUTE((nonnull(2,5,6), warn_unused_result));
 
 /** Free a persistent index tree if it exists.
 @param[in,out]	space		tablespce
@@ -321,12 +324,13 @@ btr_write_autoinc(dict_index_t* index, ib_uint64_t autoinc, bool reset = false)
 @param[in,out]	mtr	mini-transaction */
 void btr_set_instant(buf_block_t* root, const dict_index_t& index, mtr_t* mtr);
 
+ATTRIBUTE_COLD __attribute__((nonnull, warn_unused_result))
 /** Reset the table to the canonical format on ROLLBACK of instant ALTER TABLE.
 @param[in]      index   clustered index with instant ALTER TABLE
 @param[in]      all     whether to reset FIL_PAGE_TYPE as well
-@param[in,out]  mtr     mini-transaction */
-ATTRIBUTE_COLD __attribute__((nonnull))
-void btr_reset_instant(const dict_index_t &index, bool all, mtr_t *mtr);
+@param[in,out]  mtr     mini-transaction
+@return error code */
+dberr_t btr_reset_instant(const dict_index_t &index, bool all, mtr_t *mtr);
 
 /*************************************************************//**
 Makes tree one level higher by splitting the root, and inserts
@@ -551,8 +555,8 @@ btr_page_create(
 @param[in]	blob	whether this is freeing a BLOB page
 @param[in]	latched	whether index->table->space->x_lock() was called */
 MY_ATTRIBUTE((nonnull))
-void btr_page_free(dict_index_t* index, buf_block_t* block, mtr_t* mtr,
-		   bool blob = false, bool space_latched = false);
+dberr_t btr_page_free(dict_index_t *index, buf_block_t *block, mtr_t *mtr,
+                      bool blob= false, bool space_latched= false);
 
 /**************************************************************//**
 Gets the root node of a tree and x- or s-latches it.
@@ -563,7 +567,8 @@ btr_root_block_get(
 	const dict_index_t*	index,	/*!< in: index tree */
 	rw_lock_type_t		mode,	/*!< in: either RW_S_LATCH
 					or RW_X_LATCH */
-	mtr_t*			mtr);	/*!< in: mtr */
+	mtr_t*			mtr,	/*!< in: mtr */
+	dberr_t*		err);	/*!< out: error code */
 /*************************************************************//**
 Reorganizes an index page.
 

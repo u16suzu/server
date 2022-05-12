@@ -307,7 +307,8 @@ btr_get_size_and_reserved(
 		return(ULINT_UNDEFINED);
 	}
 
-	buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH, mtr);
+	dberr_t err;
+	buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH, mtr, &err);
 	*used = 0;
 	if (!root) {
 		return ULINT_UNDEFINED;

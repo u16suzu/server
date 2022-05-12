@@ -325,23 +325,18 @@ ibuf_header_page_get(
 /** Acquire the change buffer root page.
 @param[in,out]  mtr     mini-transaction
 @return change buffer root page, SX-latched */
-static buf_block_t *ibuf_tree_root_get(mtr_t *mtr)
+static buf_block_t *ibuf_tree_root_get(mtr_t *mtr, dberr_t *err= nullptr)
 {
-	buf_block_t*	block;
+  ut_ad(ibuf_inside(mtr));
+  mysql_mutex_assert_owner(&ibuf_mutex);
 
-	ut_ad(ibuf_inside(mtr));
-	mysql_mutex_assert_owner(&ibuf_mutex);
+  mtr_sx_lock_index(ibuf.index, mtr);
 
-	mtr_sx_lock_index(ibuf.index, mtr);
-
-	/* only segment list access is exclusive each other */
-	block = buf_page_get(
-		page_id_t(IBUF_SPACE_ID, FSP_IBUF_TREE_ROOT_PAGE_NO),
-		0, RW_SX_LATCH, mtr);
-
-	ut_ad(!block || ibuf.empty == page_is_empty(block->page.frame));
-
-	return block;
+  buf_block_t *block=
+    buf_page_get_gen(page_id_t{IBUF_SPACE_ID, FSP_IBUF_TREE_ROOT_PAGE_NO},
+                     0, RW_SX_LATCH, nullptr, BUF_GET, mtr, err);
+  ut_ad(!block || ibuf.empty == page_is_empty(block->page.frame));
+  return block;
 }
 
 /******************************************************************//**
@@ -1796,11 +1791,12 @@ static bool ibuf_add_free_page()
 	of a deadlock. This is the reason why we created a special ibuf
 	header page apart from the ibuf tree. */
 
-	block = fseg_alloc_free_page(
+	dberr_t err;
+	block = fseg_alloc_free_page_general(
 		header_page + IBUF_HEADER + IBUF_TREE_SEG_HEADER, 0, FSP_UP,
-		&mtr);
+		false, &mtr, &mtr, &err);
 
-	if (block == NULL) {
+	if (!block) {
 		mtr.commit();
 		return false;
 	}
@@ -1813,6 +1809,7 @@ static bool ibuf_add_free_page()
 		     FIL_PAGE_IBUF_FREE_LIST);
 	buf_block_t* ibuf_root = ibuf_tree_root_get(&mtr);
 	if (UNIV_UNLIKELY(!ibuf_root)) {
+corrupted:
 		/* Do not bother to try to free the allocated block, because
 		the change buffer is seriously corrupted already. */
 		mysql_mutex_unlock(&ibuf_mutex);
@@ -1822,12 +1819,12 @@ static bool ibuf_add_free_page()
 
 	/* Add the page to the free list and update the ibuf size data */
 
-	flst_add_last(ibuf_root,
-		      PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST,
-		      block, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST_NODE, &mtr);
-
-	ibuf.seg_size++;
-	ibuf.free_list_len++;
+	err = flst_add_last(ibuf_root, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST,
+			    block, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST_NODE,
+			    &mtr);
+	if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
+		goto corrupted;
+	}
 
 	/* Set the bit indicating that this page is now an ibuf tree page
 	(level 2 page) */
@@ -1835,17 +1832,18 @@ static bool ibuf_add_free_page()
 	const page_id_t page_id(block->page.id());
 	buf_block_t* bitmap_page = ibuf_bitmap_get_map_page(page_id, 0, &mtr);
 
-	mysql_mutex_unlock(&ibuf_mutex);
-
-	if (bitmap_page) {
-		ibuf_bitmap_page_set_bits<IBUF_BITMAP_IBUF>(bitmap_page,
-							    page_id,
-							    srv_page_size,
-							    true, &mtr);
+	if (UNIV_UNLIKELY(!bitmap_page)) {
+		goto corrupted;
 	}
 
-	ibuf_mtr_commit(&mtr);
+	ibuf.seg_size++;
+	ibuf.free_list_len++;
 
+	mysql_mutex_unlock(&ibuf_mutex);
+
+	ibuf_bitmap_page_set_bits<IBUF_BITMAP_IBUF>(bitmap_page, page_id,
+						    srv_page_size, true, &mtr);
+	ibuf_mtr_commit(&mtr);
 	return true;
 }
 
@@ -1910,17 +1908,21 @@ early_exit:
 	page from it. */
 
 	compile_time_assert(IBUF_SPACE_ID == 0);
-	fseg_free_page(header_page + IBUF_HEADER + IBUF_TREE_SEG_HEADER,
-		       fil_system.sys_space, page_no, &mtr);
-
-	const page_id_t	page_id(IBUF_SPACE_ID, page_no);
+	const page_id_t	page_id{IBUF_SPACE_ID, page_no};
 	buf_block_t* bitmap_page = nullptr;
+	dberr_t err = fseg_free_page(
+		header_page + IBUF_HEADER + IBUF_TREE_SEG_HEADER,
+		fil_system.sys_space, page_no, &mtr);
+
+	if (err != DB_SUCCESS) {
+		goto func_exit;
+	}
 
 	ibuf_enter(&mtr);
 
 	mysql_mutex_lock(&ibuf_mutex);
 
-	root = ibuf_tree_root_get(&mtr);
+	root = ibuf_tree_root_get(&mtr, &err);
 	if (UNIV_UNLIKELY(!root)) {
 		mysql_mutex_unlock(&ibuf_pessimistic_insert_mutex);
 		goto func_exit;
@@ -1930,29 +1932,36 @@ early_exit:
 				       + root->page.frame).page);
 
 	/* Remove the page from the free list and update the ibuf size data */
-	if (buf_block_t* block = buf_page_get(page_id, 0, RW_X_LATCH, &mtr)) {
-		flst_remove(root, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST,
-			    block, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST_NODE,
-			    &mtr);
+	if (buf_block_t* block =
+	    buf_page_get_gen(page_id, 0, RW_X_LATCH, nullptr, BUF_GET,
+			     &mtr, &err)) {
+		err = flst_remove(root, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST,
+				  block,
+				  PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST_NODE,
+				  &mtr);
 	}
+
 	mysql_mutex_unlock(&ibuf_pessimistic_insert_mutex);
 
-	ibuf.seg_size--;
-	ibuf.free_list_len--;
+	if (err == DB_SUCCESS) {
+		ibuf.seg_size--;
+		ibuf.free_list_len--;
+		bitmap_page = ibuf_bitmap_get_map_page(page_id, 0, &mtr);
+	}
 
-	/* Set the bit indicating that this page is no more an ibuf tree page
-	(level 2 page) */
-
-	bitmap_page = ibuf_bitmap_get_map_page(page_id, 0, &mtr);
 func_exit:
 	mysql_mutex_unlock(&ibuf_mutex);
 
-        if (bitmap_page) {
+	if (bitmap_page) {
+		/* Set the bit indicating that this page is no more an
+		ibuf tree page (level 2 page) */
 		ibuf_bitmap_page_set_bits<IBUF_BITMAP_IBUF>(
 			bitmap_page, page_id, srv_page_size, false, &mtr);
 	}
 
-	buf_page_free(fil_system.sys_space, page_no, &mtr);
+	if (err == DB_SUCCESS) {
+		buf_page_free(fil_system.sys_space, page_no, &mtr);
+	}
 
 	ibuf_mtr_commit(&mtr);
 }

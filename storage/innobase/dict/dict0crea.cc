@@ -771,11 +771,7 @@ func_exit:
 
 		node->page_no = btr_create(
 			index->type, index->table->space,
-			index->id, index, &mtr);
-
-		if (node->page_no == FIL_NULL) {
-			err = DB_OUT_OF_FILE_SPACE;
-		}
+			index->id, index, &mtr, &err);
 
 		DBUG_EXECUTE_IF("ib_import_create_index_failure_1",
 				node->page_no = FIL_NULL;
@@ -795,7 +791,7 @@ func_exit:
 /***************************************************************//**
 Creates an index tree for the index if it is not a member of a cluster.
 Don't update SYSTEM TABLES.
-@return DB_SUCCESS or DB_OUT_OF_FILE_SPACE */
+@return error code */
 dberr_t
 dict_create_index_tree_in_mem(
 /*==========================*/
@@ -815,13 +811,14 @@ dict_create_index_tree_in_mem(
 	ut_ad(index->is_readable());
 	ut_ad(!(index->table->flags2 & DICT_TF2_DISCARDED));
 
+	dberr_t err;
 	index->page = btr_create(index->type, index->table->space,
-				 index->id, index, &mtr);
+				 index->id, index, &mtr, &err);
 	mtr_commit(&mtr);
 
 	index->trx_id = trx->id;
 
-	return index->page == FIL_NULL ? DB_OUT_OF_FILE_SPACE : DB_SUCCESS;
+	return err;
 }
 
 /** Drop the index tree associated with a row in SYS_INDEXES table.

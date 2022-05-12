@@ -52,9 +52,8 @@ inline bool trx_sys_hdr_page(const page_id_t page_id)
 
 /*****************************************************************//**
 Creates and initializes the transaction system at the database creation. */
-void
-trx_sys_create_sys_pages(void);
-/*==========================*/
+dberr_t trx_sys_create_sys_pages(mtr_t *mtr);
+
 /** Find an available rollback segment.
 @param[in]	sys_header
 @return an unallocated rollback segment slot in the TRX_SYS header

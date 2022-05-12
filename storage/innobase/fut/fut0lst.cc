@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1995, 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2019, 2021, MariaDB Corporation.
+Copyright (c) 2019, 2022, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -38,9 +38,8 @@ Created 11/28/1995 Heikki Tuuri
 static void flst_write_addr(const buf_block_t& block, byte *faddr,
                             uint32_t page, uint16_t boffset, mtr_t* mtr)
 {
-  ut_ad(mtr->memo_contains_page_flagged(faddr,
-					MTR_MEMO_PAGE_X_FIX
-					| MTR_MEMO_PAGE_SX_FIX));
+  ut_ad(mtr->memo_contains_page_flagged(faddr, MTR_MEMO_PAGE_X_FIX |
+                                        MTR_MEMO_PAGE_SX_FIX));
   ut_a(page == FIL_NULL || boffset >= FIL_PAGE_DATA);
   ut_a(ut_align_offset(faddr, srv_page_size) >= FIL_PAGE_DATA);
 
@@ -69,7 +68,7 @@ static void flst_write_addr(const buf_block_t& block, byte *faddr,
 
 /** Write 2 null file addresses.
 @param[in]      b       file page
-@param[in,out]  addr	file address to be zeroed out
+@param[in,out]  addr    file address to be zeroed out
 @param[in,out]  mtr     mini-transaction */
 static void flst_zero_both(const buf_block_t& b, byte *addr, mtr_t *mtr)
 {
@@ -120,8 +119,8 @@ static void flst_add_to_empty(buf_block_t *base, uint16_t boffset,
 @param[in]      coffset byte offset of the insert position
 @param[in,out]  add     block to be added
 @param[in]      aoffset byte offset of the block to be added
-@param[in,outr] mtr     mini-transaction */
-static void flst_insert_after(buf_block_t *base, uint16_t boffset,
+@param[in,out]  mtr     mini-transaction */
+static dberr_t flst_insert_after(buf_block_t *base, uint16_t boffset,
                               buf_block_t *cur, uint16_t coffset,
                               buf_block_t *add, uint16_t aoffset, mtr_t *mtr)
 {
@@ -145,6 +144,8 @@ static void flst_insert_after(buf_block_t *base, uint16_t boffset,
   flst_write_addr(*add, add->page.frame + aoffset + FLST_NEXT,
                   next_addr.page, next_addr.boffset, mtr);
 
+  dberr_t err= DB_SUCCESS;
+
   if (next_addr.page == FIL_NULL)
     flst_write_addr(*base, base->page.frame + boffset + FLST_LAST,
                     add->page.id().page_no(), aoffset, mtr);
@@ -152,7 +153,8 @@ static void flst_insert_after(buf_block_t *base, uint16_t boffset,
   {
     buf_block_t *block;
     if (flst_node_t *next= fut_get_ptr(add->page.id().space(), add->zip_size(),
-                                       next_addr, RW_SX_LATCH, mtr, &block))
+                                       next_addr, RW_SX_LATCH,
+                                       mtr, &block, &err))
       flst_write_addr(*block, next + FLST_PREV,
                       add->page.id().page_no(), aoffset, mtr);
   }
@@ -162,6 +164,7 @@ static void flst_insert_after(buf_block_t *base, uint16_t boffset,
 
   byte *len= &base->page.frame[boffset + FLST_LEN];
   mtr->write<4>(*base, len, mach_read_from_4(len) + 1);
+  return err;
 }
 
 /** Insert a node before another one.
@@ -171,10 +174,12 @@ static void flst_insert_after(buf_block_t *base, uint16_t boffset,
 @param[in]      coffset byte offset of the insert position
 @param[in,out]  add     block to be added
 @param[in]      aoffset byte offset of the block to be added
-@param[in,outr] mtr     mini-transaction */
-static void flst_insert_before(buf_block_t *base, uint16_t boffset,
-                               buf_block_t *cur, uint16_t coffset,
-                               buf_block_t *add, uint16_t aoffset, mtr_t *mtr)
+@param[in,out]  mtr     mini-transaction
+@return error code */
+static dberr_t flst_insert_before(buf_block_t *base, uint16_t boffset,
+                                  buf_block_t *cur, uint16_t coffset,
+                                  buf_block_t *add, uint16_t aoffset,
+                                  mtr_t *mtr)
 {
   ut_ad(base != cur || boffset != coffset);
   ut_ad(base != add || boffset != aoffset);
@@ -194,7 +199,9 @@ static void flst_insert_before(buf_block_t *base, uint16_t boffset,
   flst_write_addr(*add, add->page.frame + aoffset + FLST_PREV,
                   prev_addr.page, prev_addr.boffset, mtr);
   flst_write_addr(*add, add->page.frame + aoffset + FLST_NEXT,
-		  cur->page.id().page_no(), coffset, mtr);
+                  cur->page.id().page_no(), coffset, mtr);
+
+  dberr_t err= DB_SUCCESS;
 
   if (prev_addr.page == FIL_NULL)
     flst_write_addr(*base, base->page.frame + boffset + FLST_FIRST,
@@ -203,7 +210,8 @@ static void flst_insert_before(buf_block_t *base, uint16_t boffset,
   {
     buf_block_t *block;
     if (flst_node_t *prev= fut_get_ptr(add->page.id().space(), add->zip_size(),
-                                       prev_addr, RW_SX_LATCH, mtr, &block))
+                                       prev_addr, RW_SX_LATCH,
+                                       mtr, &block, &err))
       flst_write_addr(*block, prev + FLST_NEXT,
                       add->page.id().page_no(), aoffset, mtr);
   }
@@ -213,6 +221,7 @@ static void flst_insert_before(buf_block_t *base, uint16_t boffset,
 
   byte *len= &base->page.frame[boffset + FLST_LEN];
   mtr->write<4>(*base, len, mach_read_from_4(len) + 1);
+  return err;
 }
 
 /** Initialize a list base node.
@@ -234,8 +243,8 @@ void flst_init(const buf_block_t& block, byte *base, mtr_t *mtr)
 @param[in,out]  add     block to be added
 @param[in]      aoffset byte offset of the node to be added
 @param[in,outr] mtr     mini-transaction */
-void flst_add_last(buf_block_t *base, uint16_t boffset,
-                   buf_block_t *add, uint16_t aoffset, mtr_t *mtr)
+dberr_t flst_add_last(buf_block_t *base, uint16_t boffset,
+                      buf_block_t *add, uint16_t aoffset, mtr_t *mtr)
 {
   ut_ad(base != add || boffset != aoffset);
   ut_ad(boffset < base->physical_size());
@@ -244,7 +253,7 @@ void flst_add_last(buf_block_t *base, uint16_t boffset,
                                    MTR_MEMO_PAGE_SX_FIX));
   ut_ad(mtr->memo_contains_flagged(add, MTR_MEMO_PAGE_X_FIX |
                                    MTR_MEMO_PAGE_SX_FIX));
-
+  dberr_t err= DB_SUCCESS;
   if (!flst_get_len(base->page.frame + boffset))
     flst_add_to_empty(base, boffset, add, aoffset, mtr);
   else
@@ -254,12 +263,13 @@ void flst_add_last(buf_block_t *base, uint16_t boffset,
     const flst_node_t *c= addr.page == add->page.id().page_no()
       ? add->page.frame + addr.boffset
       : fut_get_ptr(add->page.id().space(), add->zip_size(), addr,
-                    RW_SX_LATCH, mtr, &cur);
+                    RW_SX_LATCH, mtr, &cur, &err);
     if (c)
-      flst_insert_after(base, boffset, cur,
-                        static_cast<uint16_t>(c - cur->page.frame),
-                        add, aoffset, mtr);
+      return flst_insert_after(base, boffset, cur,
+                               static_cast<uint16_t>(c - cur->page.frame),
+                               add, aoffset, mtr);
   }
+  return err;
 }
 
 /** Prepend a file list node to a list.
@@ -267,9 +277,10 @@ void flst_add_last(buf_block_t *base, uint16_t boffset,
 @param[in]      boffset byte offset of the base node
 @param[in,out]  add     block to be added
 @param[in]      aoffset byte offset of the node to be added
-@param[in,outr] mtr     mini-transaction */
-void flst_add_first(buf_block_t *base, uint16_t boffset,
-                    buf_block_t *add, uint16_t aoffset, mtr_t *mtr)
+@param[in,out]  mtr     mini-transaction
+@return error code */
+dberr_t flst_add_first(buf_block_t *base, uint16_t boffset,
+                       buf_block_t *add, uint16_t aoffset, mtr_t *mtr)
 {
   ut_ad(base != add || boffset != aoffset);
   ut_ad(boffset < base->physical_size());
@@ -280,19 +291,24 @@ void flst_add_first(buf_block_t *base, uint16_t boffset,
                                    MTR_MEMO_PAGE_SX_FIX));
 
   if (!flst_get_len(base->page.frame + boffset))
+  {
     flst_add_to_empty(base, boffset, add, aoffset, mtr);
+    return DB_SUCCESS;
+  }
   else
   {
     fil_addr_t addr= flst_get_first(base->page.frame + boffset);
     buf_block_t *cur= add;
+    dberr_t err= DB_SUCCESS;
     const flst_node_t *c= addr.page == add->page.id().page_no()
       ? add->page.frame + addr.boffset
       : fut_get_ptr(add->page.id().space(), add->zip_size(), addr,
-                    RW_SX_LATCH, mtr, &cur);
+                    RW_SX_LATCH, mtr, &cur, &err);
     if (c)
-      flst_insert_before(base, boffset, cur,
-                         static_cast<uint16_t>(c - cur->page.frame),
-                         add, aoffset, mtr);
+      return flst_insert_before(base, boffset, cur,
+                                static_cast<uint16_t>(c - cur->page.frame),
+                                add, aoffset, mtr);
+    return err;
   }
 }
 
@@ -301,9 +317,10 @@ void flst_add_first(buf_block_t *base, uint16_t boffset,
 @param[in]      boffset byte offset of the base node
 @param[in,out]  cur     block to be removed
 @param[in]      coffset byte offset of the current record to be removed
-@param[in,outr] mtr     mini-transaction */
-void flst_remove(buf_block_t *base, uint16_t boffset,
-                 buf_block_t *cur, uint16_t coffset, mtr_t *mtr)
+@param[in,out]  mtr     mini-transaction
+@return error code */
+dberr_t flst_remove(buf_block_t *base, uint16_t boffset,
+                    buf_block_t *cur, uint16_t coffset, mtr_t *mtr)
 {
   ut_ad(boffset < base->physical_size());
   ut_ad(coffset < cur->physical_size());
@@ -314,6 +331,7 @@ void flst_remove(buf_block_t *base, uint16_t boffset,
 
   const fil_addr_t prev_addr= flst_get_prev_addr(cur->page.frame + coffset);
   const fil_addr_t next_addr= flst_get_next_addr(cur->page.frame + coffset);
+  dberr_t err= DB_SUCCESS;
 
   if (prev_addr.page == FIL_NULL)
     flst_write_addr(*base, base->page.frame + boffset + FLST_FIRST,
@@ -324,7 +342,7 @@ void flst_remove(buf_block_t *base, uint16_t boffset,
     if (flst_node_t *prev= prev_addr.page == cur->page.id().page_no()
         ? cur->page.frame + prev_addr.boffset
         : fut_get_ptr(cur->page.id().space(), cur->zip_size(), prev_addr,
-                      RW_SX_LATCH, mtr, &block))
+                      RW_SX_LATCH, mtr, &block, &err))
       flst_write_addr(*block, prev + FLST_NEXT,
                       next_addr.page, next_addr.boffset, mtr);
   }
@@ -335,17 +353,21 @@ void flst_remove(buf_block_t *base, uint16_t boffset,
   else
   {
     buf_block_t *block= cur;
+    dberr_t err2;
     if (flst_node_t *next= next_addr.page == cur->page.id().page_no()
         ? cur->page.frame + next_addr.boffset
         : fut_get_ptr(cur->page.id().space(), cur->zip_size(), next_addr,
-                      RW_SX_LATCH, mtr, &block))
+                      RW_SX_LATCH, mtr, &block, &err2))
       flst_write_addr(*block, next + FLST_PREV,
                       prev_addr.page, prev_addr.boffset, mtr);
+    else if (err == DB_SUCCESS)
+      err= err2;
   }
 
   byte *len= &base->page.frame[boffset + FLST_LEN];
   ut_ad(mach_read_from_4(len) > 0);
   mtr->write<4>(*base, len, mach_read_from_4(len) - 1);
+  return err;
 }
 
 #ifdef UNIV_DEBUG

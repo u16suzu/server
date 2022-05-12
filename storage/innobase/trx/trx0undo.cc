@@ -278,13 +278,16 @@ trx_undo_get_next_rec(const buf_block_t *&block, uint16_t rec,
 @param[in]      mode    latching mode: RW_S_LATCH or RW_X_LATCH
 @param[out]     block   undo log page
 @param[in,out]  mtr     mini-transaction
-@return undo log record, the page latched, NULL if none */
+@param[out]     err     error code
+@return undo log record, the page latched
+@retval nullptr if none */
 trx_undo_rec_t*
 trx_undo_get_first_rec(const fil_space_t &space, uint32_t page_no,
                        uint16_t offset, ulint mode, const buf_block_t*& block,
-                       mtr_t *mtr)
+                       mtr_t *mtr, dberr_t *err)
 {
-  block= buf_page_get(page_id_t(space.id, page_no), 0, mode, mtr);
+  block= buf_page_get_gen(page_id_t{space.id, page_no}, 0, mode,
+                          nullptr, BUF_GET, mtr, err);
   if (!block)
     return nullptr;
 
@@ -479,7 +482,6 @@ trx_undo_seg_create(fil_space_t *space, buf_block_t *rseg_hdr, ulint *id,
 {
 	buf_block_t*	block;
 	uint32_t	n_reserved;
-	bool		success;
 
 	const ulint slot_no = trx_rsegf_undo_find_free(rseg_hdr);
 
@@ -494,22 +496,20 @@ trx_undo_seg_create(fil_space_t *space, buf_block_t *rseg_hdr, ulint *id,
 
 	ut_ad(slot_no < TRX_RSEG_N_SLOTS);
 
-	success = fsp_reserve_free_extents(&n_reserved, space, 2, FSP_UNDO,
+	*err = fsp_reserve_free_extents(&n_reserved, space, 2, FSP_UNDO,
 					   mtr);
-	if (!success) {
-		*err = DB_OUT_OF_FILE_SPACE;
+	if (UNIV_UNLIKELY(*err != DB_SUCCESS)) {
 		return NULL;
 	}
 
 	/* Allocate a new file segment for the undo log */
 	block = fseg_create(space, TRX_UNDO_SEG_HDR + TRX_UNDO_FSEG_HEADER,
-			    mtr, true);
+			    mtr, err, true);
 
 	space->release_free_extents(n_reserved);
 
-	if (block == NULL) {
-		*err = DB_OUT_OF_FILE_SPACE;
-		return NULL;
+	if (!block) {
+		return block;
 	}
 
 	mtr->undo_create(*block);
@@ -525,8 +525,9 @@ trx_undo_seg_create(fil_space_t *space, buf_block_t *rseg_hdr, ulint *id,
 	flst_init(*block, TRX_UNDO_SEG_HDR + TRX_UNDO_PAGE_LIST
 		  + block->page.frame, mtr);
 
-	flst_add_last(block, TRX_UNDO_SEG_HDR + TRX_UNDO_PAGE_LIST,
-		      block, TRX_UNDO_PAGE_HDR + TRX_UNDO_PAGE_NODE, mtr);
+	*err = flst_add_last(block, TRX_UNDO_SEG_HDR + TRX_UNDO_PAGE_LIST,
+			     block, TRX_UNDO_PAGE_HDR + TRX_UNDO_PAGE_NODE,
+			     mtr);
 
 	*id = slot_no;
 	mtr->write<4>(*rseg_hdr, TRX_RSEG + TRX_RSEG_UNDO_SLOTS
@@ -667,55 +668,58 @@ trx_undo_read_xid(const trx_ulogf_t* log_hdr, XID* xid)
 /** Allocate an undo log page.
 @param[in,out]	undo	undo log
 @param[in,out]	mtr	mini-transaction that does not hold any page latch
+@param[out]	err	error code
 @return	X-latched block if success
-@retval	NULL	on failure */
-buf_block_t* trx_undo_add_page(trx_undo_t* undo, mtr_t* mtr)
+@retval	nullptr	on failure */
+buf_block_t *trx_undo_add_page(trx_undo_t *undo, mtr_t *mtr, dberr_t *err)
 {
-	trx_rseg_t*	rseg		= undo->rseg;
-	buf_block_t*	new_block	= NULL;
-	uint32_t	n_reserved;
+  buf_block_t *new_block= nullptr;
+  uint32_t n_reserved;
 
-	/* When we add a page to an undo log, this is analogous to
-	a pessimistic insert in a B-tree, and we must reserve the
-	counterpart of the tree latch, which is the rseg mutex. */
+  /* When we add a page to an undo log, this is analogous to
+   a pessimistic insert in a B-tree, and we must reserve the
+   counterpart of the tree latch, which is the rseg mutex. */
 
-	rseg->latch.wr_lock(SRW_LOCK_CALL);
+  trx_rseg_t *rseg= undo->rseg;
+  rseg->latch.wr_lock(SRW_LOCK_CALL);
 
-	buf_block_t* header_block =
-		buf_page_get(page_id_t(undo->rseg->space->id,
-				       undo->hdr_page_no),
-			     0, RW_X_LATCH, mtr);
+  buf_block_t *header_block=
+    buf_page_get_gen(page_id_t{rseg->space->id, undo->hdr_page_no},
+                     0, RW_X_LATCH, nullptr, BUF_GET, mtr, err);
+  if (!header_block)
+    goto func_exit;
+  *err= fsp_reserve_free_extents(&n_reserved, rseg->space, 1, FSP_UNDO, mtr);
 
-	if (!header_block
-	    || !fsp_reserve_free_extents(&n_reserved, undo->rseg->space, 1,
-					 FSP_UNDO, mtr)) {
-		goto func_exit;
-	}
+  if (UNIV_UNLIKELY(*err != DB_SUCCESS))
+    goto func_exit;
 
-	new_block = fseg_alloc_free_page_general(
-		TRX_UNDO_SEG_HDR + TRX_UNDO_FSEG_HEADER
-		+ header_block->page.frame,
-		undo->top_page_no + 1, FSP_UP, true, mtr, mtr);
+  new_block=
+    fseg_alloc_free_page_general(TRX_UNDO_SEG_HDR + TRX_UNDO_FSEG_HEADER +
+                                 header_block->page.frame,
+                                 undo->top_page_no + 1, FSP_UP, true,
+                                 mtr, mtr, err);
+  rseg->space->release_free_extents(n_reserved);
 
-	rseg->space->release_free_extents(n_reserved);
+  if (!new_block)
+    goto func_exit;
 
-	if (!new_block) {
-		goto func_exit;
-	}
+  undo->last_page_no= new_block->page.id().page_no();
 
-	undo->last_page_no = new_block->page.id().page_no();
-
-	mtr->undo_create(*new_block);
-	trx_undo_page_init(*new_block);
-
-	flst_add_last(header_block, TRX_UNDO_SEG_HDR + TRX_UNDO_PAGE_LIST,
-		      new_block, TRX_UNDO_PAGE_HDR + TRX_UNDO_PAGE_NODE, mtr);
-	undo->size++;
-	rseg->curr_size++;
+  mtr->undo_create(*new_block);
+  trx_undo_page_init(*new_block);
+  *err= flst_add_last(header_block, TRX_UNDO_SEG_HDR + TRX_UNDO_PAGE_LIST,
+                      new_block, TRX_UNDO_PAGE_HDR + TRX_UNDO_PAGE_NODE, mtr);
+  if (UNIV_UNLIKELY(*err != DB_SUCCESS))
+    new_block= nullptr;
+  else
+  {
+    undo->size++;
+    rseg->curr_size++;
+  }
 
 func_exit:
-	rseg->latch.wr_unlock();
-	return(new_block);
+  rseg->latch.wr_unlock();
+  return new_block;
 }
 
 /********************************************************************//**
@@ -731,31 +735,42 @@ trx_undo_free_page(
 	uint32_t hdr_page_no,	/*!< in: header page number */
 	uint32_t page_no,	/*!< in: page number to free: must not be the
 				header page */
-	mtr_t*	mtr)		/*!< in: mtr which does not have a latch to any
+	mtr_t*	mtr,		/*!< in: mtr which does not have a latch to any
 				undo log page; the caller must have reserved
 				the rollback segment mutex */
+	dberr_t* err)		/*!< out: error code */
 {
 	ut_a(hdr_page_no != page_no);
 
-	buf_block_t* undo_block = buf_page_get(page_id_t(rseg->space->id,
-                                                         page_no),
-                                               0, RW_X_LATCH, mtr);
-	if (!undo_block) {
+	buf_block_t* undo_block = buf_page_get_gen(page_id_t(rseg->space->id,
+							     page_no),
+						   0, RW_X_LATCH, nullptr,
+						   BUF_GET, mtr, err);
+	if (UNIV_UNLIKELY(!undo_block)) {
 		return FIL_NULL;
 	}
-	buf_block_t* header_block = buf_page_get(page_id_t(rseg->space->id,
-							   hdr_page_no),
-						 0, RW_X_LATCH, mtr);
-	if (!header_block) {
+	buf_block_t* header_block = buf_page_get_gen(page_id_t(rseg->space->id,
+							       hdr_page_no),
+						     0, RW_X_LATCH, nullptr,
+						     BUF_GET, mtr, err);
+	if (UNIV_UNLIKELY(!header_block)) {
 		return FIL_NULL;
 	}
 
-	flst_remove(header_block, TRX_UNDO_SEG_HDR + TRX_UNDO_PAGE_LIST,
-		    undo_block, TRX_UNDO_PAGE_HDR + TRX_UNDO_PAGE_NODE, mtr);
+	*err = flst_remove(header_block, TRX_UNDO_SEG_HDR + TRX_UNDO_PAGE_LIST,
+			   undo_block, TRX_UNDO_PAGE_HDR + TRX_UNDO_PAGE_NODE,
+			   mtr);
 
-	fseg_free_page(TRX_UNDO_SEG_HDR + TRX_UNDO_FSEG_HEADER
-		       + header_block->page.frame,
-		       rseg->space, page_no, mtr);
+	if (UNIV_UNLIKELY(*err != DB_SUCCESS)) {
+		return FIL_NULL;
+	}
+
+	*err = fseg_free_page(TRX_UNDO_SEG_HDR + TRX_UNDO_FSEG_HEADER
+			      + header_block->page.frame,
+			      rseg->space, page_no, mtr);
+	if (UNIV_UNLIKELY(*err != DB_SUCCESS)) {
+		return FIL_NULL;
+	}
 	buf_page_free(rseg->space, page_no, mtr);
 
 	const fil_addr_t last_addr = flst_get_last(
@@ -764,7 +779,7 @@ trx_undo_free_page(
 	rseg->curr_size--;
 
 	if (!in_history) {
-	} else if (buf_block_t* rseg_header = rseg->get(mtr)) {
+	} else if (buf_block_t* rseg_header = rseg->get(mtr, err)) {
 		byte* rseg_hist_size = TRX_RSEG + TRX_RSEG_HISTORY_SIZE
 			+ rseg_header->page.frame;
 		uint32_t hist_size = mach_read_from_4(rseg_hist_size);
@@ -780,78 +795,101 @@ trx_undo_free_page(
 /** Free the last undo log page. The caller must hold the rseg mutex.
 @param[in,out]	undo	undo log
 @param[in,out]	mtr	mini-transaction that does not hold any undo log page
-			or that has allocated the undo log page */
-void
-trx_undo_free_last_page(trx_undo_t* undo, mtr_t* mtr)
+			or that has allocated the undo log page
+@return error code */
+dberr_t trx_undo_free_last_page(trx_undo_t *undo, mtr_t *mtr)
 {
-	ut_ad(undo->hdr_page_no != undo->last_page_no);
-	ut_ad(undo->size > 0);
+  ut_ad(undo->hdr_page_no != undo->last_page_no);
+  ut_ad(undo->size > 0);
+  undo->size--;
 
-	undo->last_page_no = trx_undo_free_page(
-		undo->rseg, false, undo->hdr_page_no, undo->last_page_no, mtr);
-
-	undo->size--;
+  dberr_t err;
+  undo->last_page_no= trx_undo_free_page(undo->rseg, false, undo->hdr_page_no,
+                                         undo->last_page_no, mtr, &err);
+  return err;
 }
 
 /** Truncate the tail of an undo log during rollback.
 @param[in,out]	undo	undo log
 @param[in]	limit	all undo logs after this limit will be discarded
-@param[in]	is_temp	whether this is temporary undo log */
-void trx_undo_truncate_end(trx_undo_t& undo, undo_no_t limit, bool is_temp)
+@param[in]	is_temp	whether this is temporary undo log
+@return error code */
+static dberr_t trx_undo_truncate_end(trx_undo_t &undo, undo_no_t limit,
+                                     bool is_temp)
 {
-	mtr_t mtr;
-	ut_ad(is_temp == !undo.rseg->is_persistent());
+  ut_ad(is_temp == !undo.rseg->is_persistent());
 
-	for (;;) {
-		mtr.start();
-		if (is_temp) {
-			mtr.set_log_mode(MTR_LOG_NO_REDO);
-		}
+  for (mtr_t mtr;;)
+  {
+    mtr.start();
+    if (is_temp)
+      mtr.set_log_mode(MTR_LOG_NO_REDO);
 
-		trx_undo_rec_t* trunc_here = NULL;
-		undo.rseg->latch.wr_lock(SRW_LOCK_CALL);
-		buf_block_t* undo_block = buf_page_get(
-			page_id_t(undo.rseg->space->id, undo.last_page_no),
-			0, RW_X_LATCH, &mtr);
-		if (!undo_block) {
-			goto func_exit;
-		}
+    trx_undo_rec_t *trunc_here= nullptr;
+    undo.rseg->latch.wr_lock(SRW_LOCK_CALL);
+    dberr_t err;
+    buf_block_t *undo_block=
+      buf_page_get_gen(page_id_t{undo.rseg->space->id, undo.last_page_no},
+                       0, RW_X_LATCH, nullptr, BUF_GET, &mtr, &err);
+    if (UNIV_UNLIKELY(!undo_block))
+      goto func_exit;
 
-		for (trx_undo_rec_t* rec = trx_undo_page_get_last_rec(
-			     undo_block, undo.hdr_page_no, undo.hdr_offset);
-		     rec; ) {
-			if (trx_undo_rec_get_undo_no(rec) < limit) {
-				goto func_exit;
-			}
-			/* Truncate at least this record off, maybe more */
-			trunc_here = rec;
+    for (trx_undo_rec_t *rec=
+           trx_undo_page_get_last_rec(undo_block,
+                                      undo.hdr_page_no, undo.hdr_offset);
+         rec; )
+    {
+      if (trx_undo_rec_get_undo_no(rec) < limit)
+        goto func_exit;
+      /* Truncate at least this record off, maybe more */
+      trunc_here= rec;
+      rec= trx_undo_page_get_prev_rec(undo_block, rec,
+                                      undo.hdr_page_no, undo.hdr_offset);
+    }
 
-			rec = trx_undo_page_get_prev_rec(undo_block, rec,
-							 undo.hdr_page_no,
-							 undo.hdr_offset);
-		}
-
-		if (undo.last_page_no != undo.hdr_page_no) {
-			trx_undo_free_last_page(&undo, &mtr);
-			undo.rseg->latch.wr_unlock();
-			mtr.commit();
-			continue;
-		}
+    if (undo.last_page_no != undo.hdr_page_no)
+    {
+      err= trx_undo_free_last_page(&undo, &mtr);
+      if (UNIV_UNLIKELY(err != DB_SUCCESS))
+        goto func_exit;
+      undo.rseg->latch.wr_unlock();
+      mtr.commit();
+      continue;
+    }
 
 func_exit:
-		undo.rseg->latch.wr_unlock();
+    undo.rseg->latch.wr_unlock();
 
-		if (trunc_here) {
-			mtr.write<2>(*undo_block,
-				     TRX_UNDO_PAGE_HDR + TRX_UNDO_PAGE_FREE
-				     + undo_block->page.frame,
-				     ulint(trunc_here
-					   - undo_block->page.frame));
-		}
+    if (trunc_here && err == DB_SUCCESS)
+      mtr.write<2>(*undo_block, TRX_UNDO_PAGE_HDR + TRX_UNDO_PAGE_FREE +
+                   undo_block->page.frame,
+                   ulint(trunc_here - undo_block->page.frame));
 
-		mtr.commit();
-		return;
-	}
+    mtr.commit();
+    return err;
+  }
+}
+
+/** Try to truncate the undo logs.
+@param trx transaction
+@return error code */
+dberr_t trx_undo_try_truncate(const trx_t &trx)
+{
+  if (trx_undo_t *undo= trx.rsegs.m_redo.undo)
+  {
+    ut_ad(undo->rseg == trx.rsegs.m_redo.rseg);
+    if (dberr_t err= trx_undo_truncate_end(*undo, trx.undo_no, false))
+      return err;
+  }
+
+  if (trx_undo_t *undo = trx.rsegs.m_noredo.undo)
+  {
+    ut_ad(undo->rseg == trx.rsegs.m_noredo.rseg);
+    if (dberr_t err= trx_undo_truncate_end(*undo, trx.undo_no, true))
+      return err;
+  }
+
+  return DB_SUCCESS;
 }
 
 /** Truncate the head of an undo log.
@@ -861,8 +899,9 @@ freed, but emptied, if all the records there are below the limit.
 @param[in]	hdr_page_no	header page number
 @param[in]	hdr_offset	header offset on the page
 @param[in]	limit		first undo number to preserve
-(everything below the limit will be truncated) */
-void
+(everything below the limit will be truncated)
+@return error code  */
+dberr_t
 trx_undo_truncate_start(
 	trx_rseg_t*	rseg,
 	uint32_t	hdr_page_no,
@@ -874,7 +913,7 @@ trx_undo_truncate_start(
 	mtr_t		mtr;
 
 	if (!limit) {
-		return;
+		return DB_SUCCESS;
 	}
 loop:
 	mtr_start(&mtr);
@@ -883,14 +922,15 @@ loop:
 		mtr.set_log_mode(MTR_LOG_NO_REDO);
 	}
 
+	dberr_t err;
 	const buf_block_t* undo_page;
 	rec = trx_undo_get_first_rec(*rseg->space, hdr_page_no, hdr_offset,
-				     RW_X_LATCH, undo_page, &mtr);
+				     RW_X_LATCH, undo_page, &mtr, &err);
 	if (rec == NULL) {
 		/* Already empty */
 done:
 		mtr.commit();
-		return;
+		return err;
 	}
 
 	last_rec = trx_undo_page_get_last_rec(undo_page, hdr_page_no,
@@ -912,11 +952,13 @@ done:
 			     + TRX_UNDO_LOG_START, end);
 	} else {
 		trx_undo_free_page(rseg, true, hdr_page_no,
-				   undo_page->page.id().page_no(), &mtr);
+				   undo_page->page.id().page_no(), &mtr, &err);
+		if (err != DB_SUCCESS) {
+			goto done;
+		}
 	}
 
-	mtr_commit(&mtr);
-
+	mtr.commit();
 	goto loop;
 }
 
@@ -948,7 +990,7 @@ static void trx_undo_seg_free(const trx_undo_t *undo)
       finished= fseg_free_step(file_seg, &mtr);
 
       if (!finished);
-      else if (buf_block_t* rseg_header = rseg->get(&mtr))
+      else if (buf_block_t* rseg_header = rseg->get(&mtr, nullptr))
       {
         static_assert(FIL_NULL == 0xffffffff, "compatibility");
         memset(TRX_RSEG + TRX_RSEG_UNDO_SLOTS + undo->id * TRX_RSEG_SLOT_SIZE +
@@ -1201,7 +1243,7 @@ trx_undo_create(trx_t* trx, trx_rseg_t* rseg, trx_undo_t** undo,
 		dberr_t* err, mtr_t* mtr)
 {
 	ulint		id;
-	buf_block_t*	block = rseg->get(mtr);
+	buf_block_t*	block = rseg->get(mtr, err);
 
 	if (block) {
 		block = trx_undo_seg_create(rseg->space, block, &id, err, mtr);

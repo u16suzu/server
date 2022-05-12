@@ -251,12 +251,17 @@ btr_root_block_get(
 	const dict_index_t*	index,	/*!< in: index tree */
 	rw_lock_type_t		mode,	/*!< in: either RW_S_LATCH
 					or RW_X_LATCH */
-	mtr_t*			mtr)	/*!< in: mtr */
+	mtr_t*			mtr,	/*!< in: mtr */
+	dberr_t*		err)	/*!< out: error code */
 {
   if (!index->table || !index->table->space)
+  {
+    *err= DB_TABLESPACE_NOT_FOUND;
     return nullptr;
+  }
 
-  buf_block_t *block = btr_block_get(*index, index->page, mode, false, mtr);
+  buf_block_t *block = btr_block_get(*index, index->page, mode, false, mtr,
+                                     err);
   if (block)
   {
     if (index->is_ibuf());
@@ -264,7 +269,10 @@ btr_root_block_get(
                                      *block, *index->table->space) ||
              !btr_root_fseg_validate(FIL_PAGE_DATA + PAGE_BTR_SEG_TOP,
                                      *block, *index->table->space))
+    {
+      *err= DB_CORRUPTION;
       block= nullptr;
+    }
   }
   return block;
 }
@@ -277,13 +285,14 @@ page_t*
 btr_root_get(
 /*=========*/
 	const dict_index_t*	index,	/*!< in: index tree */
-	mtr_t*			mtr)	/*!< in: mtr */
+	mtr_t*			mtr,	/*!< in: mtr */
+	dberr_t*		err)	/*!< out: error code */
 {
-	/* Intended to be used for segment list access.
-	SX lock doesn't block reading user data by other threads.
-	And block the segment list access by others.*/
-	buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH, mtr);
-	return(root ? buf_block_get_frame(root) : NULL);
+  /* Intended to be used for accessing file segment lists.
+  Concurrent read of other data is allowed. */
+  if (buf_block_t *root= btr_root_block_get(index, RW_SX_LATCH, mtr, err))
+    return root->page.frame;
+  return nullptr;
 }
 
 /**************************************************************//**
@@ -457,12 +466,9 @@ btr_page_alloc_for_ibuf(
 	mtr_t*		mtr,	/*!< in: mtr */
 	dberr_t*	err)	/*!< out: error code */
 {
-  buf_block_t *root= btr_root_block_get(index, RW_SX_LATCH, mtr);
+  buf_block_t *root= btr_root_block_get(index, RW_SX_LATCH, mtr, err);
   if (UNIV_UNLIKELY(!root))
-  {
-    *err = DB_CORRUPTION;
-    return nullptr;
-  }
+    return root;
 
   buf_block_t *new_block=
     buf_page_get_gen(page_id_t(index->table->space_id,
@@ -473,9 +479,10 @@ btr_page_alloc_for_ibuf(
                      index->table->space->zip_size(), RW_X_LATCH, nullptr,
                      BUF_GET, mtr, err);
   if (new_block)
-    flst_remove(root, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST, new_block,
+    *err= flst_remove(root, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST, new_block,
                 PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST_NODE, mtr);
-  ut_d(flst_validate(root, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST, mtr));
+  ut_d(if (*err == DB_SUCCESS)
+         flst_validate(root, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST, mtr));
   return new_block;
 }
 
@@ -500,20 +507,13 @@ btr_page_alloc_low(
 					page should be initialized. */
 	dberr_t*	err)		/*!< out: error code */
 {
-	page_t* root = btr_root_get(index, mtr);
-
-	fseg_header_t* seg_header = (level
-				     ? PAGE_HEADER + PAGE_BTR_SEG_TOP
-				     : PAGE_HEADER + PAGE_BTR_SEG_LEAF)
-		+ root;
-
-	/* Parameter TRUE below states that the caller has made the
-	reservation for free extents, and thus we know that a page can
-	be allocated: */
-
-	return fseg_alloc_free_page_general(
-		seg_header, hint_page_no, file_direction,
-		true, mtr, init_mtr);
+  buf_block_t *root= btr_root_block_get(index, RW_SX_LATCH, mtr, err);
+  if (UNIV_UNLIKELY(!root))
+    return root;
+  fseg_header_t *seg_header= root->page.frame +
+    (level ? PAGE_HEADER + PAGE_BTR_SEG_TOP : PAGE_HEADER + PAGE_BTR_SEG_LEAF);
+  return fseg_alloc_free_page_general(seg_header, hint_page_no, file_direction,
+                                      true, mtr, init_mtr, err);
 }
 
 /**************************************************************//**
@@ -547,21 +547,24 @@ btr_page_alloc(
 Frees a page used in an ibuf tree. Puts the page to the free list of the
 ibuf tree. */
 static
-void
+dberr_t
 btr_page_free_for_ibuf(
 /*===================*/
 	dict_index_t*	index,	/*!< in: index tree */
 	buf_block_t*	block,	/*!< in: block to be freed, x-latched */
 	mtr_t*		mtr)	/*!< in: mtr */
 {
-	ut_ad(mtr->memo_contains_flagged(block, MTR_MEMO_PAGE_X_FIX));
+  ut_ad(mtr->memo_contains_flagged(block, MTR_MEMO_PAGE_X_FIX));
 
-	buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH, mtr);
-
-	flst_add_first(root, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST,
-		       block, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST_NODE, mtr);
-
-	ut_d(flst_validate(root, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST, mtr));
+  dberr_t err;
+  if (buf_block_t *root= btr_root_block_get(index, RW_SX_LATCH, mtr, &err))
+  {
+    err= flst_add_first(root, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST,
+                   block, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST_NODE, mtr);
+    ut_d(if (err == DB_SUCCESS)
+           flst_validate(root, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST, mtr));
+  }
+  return err;
 }
 
 /** Free an index page.
@@ -569,51 +572,53 @@ btr_page_free_for_ibuf(
 @param[in,out]	block	block to be freed
 @param[in,out]	mtr	mini-transaction
 @param[in]	blob	whether this is freeing a BLOB page
-@param[in]	latched	whether index->table->space->x_lock() was called */
-void btr_page_free(dict_index_t* index, buf_block_t* block, mtr_t* mtr,
-		   bool blob, bool space_latched)
+@param[in]	latched	whether index->table->space->x_lock() was called
+@return error code */
+dberr_t btr_page_free(dict_index_t* index, buf_block_t* block, mtr_t* mtr,
+                      bool blob, bool space_latched)
 {
-	ut_ad(mtr->memo_contains_flagged(block, MTR_MEMO_PAGE_X_FIX));
+  ut_ad(mtr->memo_contains_flagged(block, MTR_MEMO_PAGE_X_FIX));
 #ifdef BTR_CUR_HASH_ADAPT
-	if (block->index && !block->index->freed()) {
-		ut_ad(!blob);
-		ut_ad(page_is_leaf(block->page.frame));
-	}
+  if (block->index && !block->index->freed())
+  {
+    ut_ad(!blob);
+    ut_ad(page_is_leaf(block->page.frame));
+  }
 #endif
-	const page_id_t id(block->page.id());
-	ut_ad(index->table->space_id == id.space());
-	/* The root page is freed by btr_free_root(). */
-	ut_ad(id.page_no() != index->page);
-	ut_ad(mtr->is_named_space(index->table->space));
+  const uint32_t page{block->page.id().page_no()};
+  ut_ad(index->table->space_id == block->page.id().space());
+  /* The root page is freed by btr_free_root(). */
+  ut_ad(page != index->page);
+  ut_ad(mtr->is_named_space(index->table->space));
 
-	/* The page gets invalid for optimistic searches: increment the frame
-	modify clock */
+  /* The page gets invalid for optimistic searches: increment the frame
+  modify clock */
+  buf_block_modify_clock_inc(block);
 
-	buf_block_modify_clock_inc(block);
+  /* TODO: Discard any operations for block from mtr->m_log.
+  The page will be freed, so previous changes to it by this
+  mini-transaction should not matter. */
 
-	if (dict_index_is_ibuf(index)) {
-		btr_page_free_for_ibuf(index, block, mtr);
-		return;
-	}
+  if (index->is_ibuf())
+    return btr_page_free_for_ibuf(index, block, mtr);
 
-	/* TODO: Discard any operations for block from mtr->log.
-	The page will be freed, so previous changes to it by this
-	mini-transaction should not matter. */
-	page_t* root = btr_root_get(index, mtr);
-	fseg_header_t* seg_header = &root[blob
-					  || page_is_leaf(block->page.frame)
-					  ? PAGE_HEADER + PAGE_BTR_SEG_LEAF
-					  : PAGE_HEADER + PAGE_BTR_SEG_TOP];
-	fil_space_t* space= index->table->space;
-	const uint32_t page= id.page_no();
+  fil_space_t *space= index->table->space;
+  dberr_t err;
+  if (page_t* root = btr_root_get(index, mtr, &err))
+  {
+    err= fseg_free_page(&root[blob || page_is_leaf(block->page.frame)
+                              ? PAGE_HEADER + PAGE_BTR_SEG_LEAF
+                              : PAGE_HEADER + PAGE_BTR_SEG_TOP],
+                        space, page, mtr, space_latched);
+  }
+  if (err == DB_SUCCESS)
+    buf_page_free(space, page, mtr);
 
-	fseg_free_page(seg_header, space, page, mtr, space_latched);
-	buf_page_free(space, page, mtr);
-
-	/* The page was marked free in the allocation bitmap, but it
-	should remain exclusively latched until mtr_t::commit() or until it
-	is explicitly freed from the mini-transaction. */
-	ut_ad(mtr->memo_contains_flagged(block, MTR_MEMO_PAGE_X_FIX));
+  /* The page was marked free in the allocation bitmap, but it
+  should remain exclusively latched until mtr_t::commit() or until it
+  is explicitly freed from the mini-transaction. */
+  ut_ad(mtr->memo_contains_flagged(block, MTR_MEMO_PAGE_X_FIX));
+  return err;
 }
 
 /** Set the child page number in a node pointer record.
@@ -641,6 +646,7 @@ inline void btr_node_ptr_set_child_page_no(buf_block_t *block,
     mtr->write<4>(*block, rec + offs - REC_NODE_PTR_SIZE, page_no);
 }
 
+MY_ATTRIBUTE((nonnull(1,2,3,4),warn_unused_result))
 /************************************************************//**
 Returns the child page of a node pointer and sx-latches it.
 @return child page, sx-latched */
@@ -651,7 +657,8 @@ btr_node_ptr_get_child(
 	const rec_t*	node_ptr,/*!< in: node pointer */
 	dict_index_t*	index,	/*!< in: index */
 	const rec_offs*	offsets,/*!< in: array returned by rec_get_offsets() */
-	mtr_t*		mtr)	/*!< in: mtr */
+	mtr_t*		mtr,	/*!< in: mtr */
+	dberr_t*	err = nullptr)	/*!< out: error code */
 {
 	ut_ad(rec_offs_validate(node_ptr, index, offsets));
 	ut_ad(index->table->space_id
@@ -660,7 +667,7 @@ btr_node_ptr_get_child(
 	return btr_block_get(
 		*index, btr_node_ptr_get_child_page_no(node_ptr, offsets),
 		RW_SX_LATCH, btr_page_get_level(page_align(node_ptr)) == 1,
-		mtr);
+		mtr, err);
 }
 
 MY_ATTRIBUTE((nonnull(2,3,5), warn_unused_result))
@@ -876,6 +883,7 @@ static void btr_root_page_init(buf_block_t *block, index_id_t index_id,
 @param[in,out]	space			tablespace where created
 @param[in]	index			index, or NULL to create a system table
 @param[in,out]	mtr			mini-transaction
+@param[out]	err			error code
 @return	page number of the created root
 @retval	FIL_NULL	if did not succeed */
 uint32_t
@@ -884,12 +892,14 @@ btr_create(
 	fil_space_t*		space,
 	index_id_t		index_id,
 	dict_index_t*		index,
-	mtr_t*			mtr)
+	mtr_t*			mtr,
+	dberr_t*		err)
 {
 	buf_block_t*		block;
 
 	ut_ad(mtr->is_named_space(space));
 	ut_ad(index_id != BTR_FREED_INDEX_ID);
+	ut_ad(index || space == fil_system.sys_space);
 
 	/* Create the two new segments (one, in the case of an ibuf tree) for
 	the index tree; the segment headers are put on the allocated root page
@@ -899,7 +909,7 @@ btr_create(
 	if (UNIV_UNLIKELY(type & DICT_IBUF)) {
 		/* Allocate first the ibuf header page */
 		buf_block_t*	ibuf_hdr_block = fseg_create(
-			space, IBUF_HEADER + IBUF_TREE_SEG_HEADER, mtr);
+			space, IBUF_HEADER + IBUF_TREE_SEG_HEADER, mtr, err);
 
 		if (ibuf_hdr_block == NULL) {
 			return(FIL_NULL);
@@ -910,11 +920,11 @@ btr_create(
 		/* Allocate then the next page to the segment: it will be the
 		tree root page */
 
-		block = fseg_alloc_free_page(
+		block = fseg_alloc_free_page_general(
 			buf_block_get_frame(ibuf_hdr_block)
 			+ IBUF_HEADER + IBUF_TREE_SEG_HEADER,
 			IBUF_TREE_ROOT_PAGE_NO,
-			FSP_UP, mtr);
+			FSP_UP, false, mtr, mtr, err);
 
 		if (block == NULL) {
 			return(FIL_NULL);
@@ -925,14 +935,14 @@ btr_create(
 		flst_init(block, PAGE_HEADER + PAGE_BTR_IBUF_FREE_LIST, mtr);
 	} else {
 		block = fseg_create(space, PAGE_HEADER + PAGE_BTR_SEG_TOP,
-				    mtr);
+				    mtr, err);
 
 		if (block == NULL) {
 			return(FIL_NULL);
 		}
 
 		if (!fseg_create(space, PAGE_HEADER + PAGE_BTR_SEG_LEAF, mtr,
-				 false, block)) {
+				 err, false, block)) {
 			/* Not enough space for new segment, free root
 			segment before return. */
 			btr_free_root(block, *space, mtr);
@@ -1035,9 +1045,10 @@ top_loop:
 
 /** Clear the index tree and reinitialize the root page, in the
 rollback of TRX_UNDO_EMPTY. The BTR_SEG_LEAF is freed and reinitialized.
-@param thr query thread */
+@param thr query thread
+@return error code */
 TRANSACTIONAL_TARGET
-void dict_index_t::clear(que_thr_t *thr)
+dberr_t dict_index_t::clear(que_thr_t *thr)
 {
   mtr_t mtr;
   mtr.start();
@@ -1046,9 +1057,11 @@ void dict_index_t::clear(que_thr_t *thr)
   else
     set_modified(mtr);
 
-  if (buf_block_t *root_block= buf_page_get(page_id_t(table->space->id, page),
-                                            table->space->zip_size(),
-                                            RW_X_LATCH, &mtr))
+  dberr_t err;
+  if (buf_block_t *root_block=
+      buf_page_get_gen(page_id_t(table->space->id, page),
+                       table->space->zip_size(),
+                       RW_X_LATCH, nullptr, BUF_GET, &mtr, &err))
   {
     btr_free_but_not_root(root_block, mtr.get_log_mode()
 #ifdef BTR_CUR_HASH_ADAPT
@@ -1063,12 +1076,13 @@ void dict_index_t::clear(que_thr_t *thr)
 #endif
     mtr.memset(root_block, PAGE_HEADER + PAGE_BTR_SEG_LEAF,
                FSEG_HEADER_SIZE, 0);
-    if (fseg_create(table->space, PAGE_HEADER + PAGE_BTR_SEG_LEAF, &mtr, false,
-                    root_block))
+    if (fseg_create(table->space, PAGE_HEADER + PAGE_BTR_SEG_LEAF, &mtr,
+                    &err, false, root_block))
       btr_root_page_init(root_block, id, this, &mtr);
   }
 
   mtr.commit();
+  return err;
 }
 
 /** Free a persistent index tree if it exists.
@@ -1664,13 +1678,15 @@ void btr_set_instant(buf_block_t* root, const dict_index_t& index, mtr_t* mtr)
 /** Reset the table to the canonical format on ROLLBACK of instant ALTER TABLE.
 @param[in]      index   clustered index with instant ALTER TABLE
 @param[in]      all     whether to reset FIL_PAGE_TYPE as well
-@param[in,out]  mtr     mini-transaction */
+@param[in,out]  mtr     mini-transaction
+@return error code */
 ATTRIBUTE_COLD
-void btr_reset_instant(const dict_index_t &index, bool all, mtr_t *mtr)
+dberr_t btr_reset_instant(const dict_index_t &index, bool all, mtr_t *mtr)
 {
   ut_ad(!index.table->is_temporary());
   ut_ad(index.is_primary());
-  if (buf_block_t *root = btr_root_block_get(&index, RW_SX_LATCH, mtr))
+  dberr_t err;
+  if (buf_block_t *root= btr_root_block_get(&index, RW_SX_LATCH, mtr, &err))
   {
     byte *page_type= root->page.frame + FIL_PAGE_TYPE;
     if (all)
@@ -1703,6 +1719,7 @@ void btr_reset_instant(const dict_index_t &index, bool all, mtr_t *mtr)
     mtr->memcpy<mtr_t::MAYBE_NOP>(*root, &root->page.frame[supremum],
                                   supremuminfimum, 8);
   }
+  return err;
 }
 
 /*************************************************************//**
@@ -3718,7 +3735,9 @@ retry:
 	}
 
 	/* Free the file page */
-	btr_page_free(index, block, mtr);
+	if (btr_page_free(index, block, mtr) != DB_SUCCESS) {
+		goto err_exit;
+	}
 
 	/* btr_check_node_ptr() needs parent block latched.
 	If the merge_block's parent block is not same,
@@ -3810,7 +3829,9 @@ btr_discard_only_page_on_level(
 		}
 
 		/* Free the file page */
-		btr_page_free(index, block, mtr);
+		if (btr_page_free(index, block, mtr) != DB_SUCCESS) {
+			return;
+		}
 
 		block = father;
 		page_level++;
@@ -3992,7 +4013,9 @@ btr_discard_page(
 	}
 
 	/* Free the file page */
-	btr_page_free(index, block, mtr);
+	if (btr_page_free(index, block, mtr) != DB_SUCCESS) {
+		return;
+	}
 
 	/* btr_check_node_ptr() needs parent block latched.
 	If the merge_block's parent block is not same,
@@ -4488,11 +4511,9 @@ btr_validate_report2(
     error << ", index tree level " << level;
 }
 
-/************************************************************//**
-Validates index tree level.
-@return TRUE if ok */
+/** Validate an index tree level. */
 static
-bool
+dberr_t
 btr_validate_level(
 /*===============*/
 	dict_index_t*	index,	/*!< in: index tree */
@@ -4510,7 +4531,6 @@ btr_validate_level(
 	rec_t*		rec;
 	page_cur_t	cursor;
 	dtuple_t*	node_ptr_tuple;
-	bool		ret	= true;
 	mtr_t		mtr;
 	mem_heap_t*	heap	= mem_heap_create(256);
 	rec_offs*	offsets	= NULL;
@@ -4534,10 +4554,11 @@ btr_validate_level(
 		}
 	}
 
-	block = btr_root_block_get(index, RW_SX_LATCH, &mtr);
+        dberr_t err;
+	block = btr_root_block_get(index, RW_SX_LATCH, &mtr, &err);
 	if (!block) {
 		mtr.commit();
-		return false;
+		return err;
 	}
 	page = buf_block_get_frame(block);
 
@@ -4552,7 +4573,7 @@ btr_validate_level(
 
 			ib::warn() << "Page is free";
 
-			ret = false;
+			err = DB_CORRUPTION;
 		}
 
 		ut_a(index->table->space_id == block->page.id().space());
@@ -4571,7 +4592,8 @@ btr_validate_level(
 					  ULINT_UNDEFINED, &heap);
 
 		savepoint2 = mtr_set_savepoint(&mtr);
-		block = btr_node_ptr_get_child(node_ptr, index, offsets, &mtr);
+		block = btr_node_ptr_get_child(node_ptr, index, offsets, &mtr,
+					       &err);
 		if (!block) {
 			break;
 		}
@@ -4596,7 +4618,7 @@ btr_validate_level(
 				savepoint2 = mtr_set_savepoint(&mtr);
 				block = btr_block_get(*index, left_page_no,
 						      RW_SX_LATCH, false,
-						      &mtr);
+						      &mtr, &err);
 				if (!block) {
 					goto invalid_page;
 				}
@@ -4612,8 +4634,9 @@ btr_validate_level(
 loop:
 	if (!block) {
 invalid_page:
+func_exit:
 		mem_heap_free(heap);
-		return false;
+		return err;
 	}
 
 	mem_heap_empty(heap);
@@ -4635,47 +4658,43 @@ invalid_page:
 #endif /* UNIV_ZIP_DEBUG */
 
 	if (fseg_page_is_free(space, block->page.id().page_no())) {
-
 		btr_validate_report1(index, level, block);
 
 		ib::warn() << "Page is marked as free";
-		ret = false;
-
+		err = DB_CORRUPTION;
 	} else if (btr_page_get_index_id(page) != index->id) {
-
 		ib::error() << "Page index id " << btr_page_get_index_id(page)
 			<< " != data dictionary index id " << index->id;
-
-		ret = false;
-
+		err = DB_CORRUPTION;
 	} else if (!page_validate(page, index)) {
-
 		btr_validate_report1(index, level, block);
-		ret = false;
-
+		err = DB_CORRUPTION;
+	} else if (btr_page_get_level(page) != level) {
+		btr_validate_report1(index, level, block);
+		ib::error() << "Page level is not " << level;
+		err = DB_CORRUPTION;
 	} else if (level == 0 && !btr_index_page_validate(block, index)) {
-
 		/* We are on level 0. Check that the records have the right
 		number of fields, and field lengths are right. */
-
-		ret = false;
+		err = DB_CORRUPTION;
+	} else if (!page_is_empty(page)) {
+	} else if (level) {
+		btr_validate_report1(index, level, block);
+		ib::error() << "Non-leaf page is empty";
+	} else if (block->page.id().page_no() != index->page) {
+		btr_validate_report1(index, level, block);
+		ib::error() << "Empty leaf page is not index root";
 	}
-
-	ut_a(btr_page_get_level(page) == level);
 
 	uint32_t right_page_no = btr_page_get_next(page);
 	uint32_t left_page_no = btr_page_get_prev(page);
-
-	ut_a(!page_is_empty(page)
-	     || (level == 0
-		 && page_get_page_no(page) == dict_index_get_page(index)));
 
 	if (right_page_no != FIL_NULL) {
 		const rec_t*	right_rec;
 		savepoint = mtr_set_savepoint(&mtr);
 
 		right_block = btr_block_get(*index, right_page_no, RW_SX_LATCH,
-					    !level, &mtr);
+					    !level, &mtr, &err);
 		if (!right_block) {
 			btr_validate_report1(index, level, block);
 			fputs("InnoDB: broken FIL_PAGE_NEXT link\n", stderr);
@@ -4687,8 +4706,7 @@ invalid_page:
 			btr_validate_report2(index, level, block, right_block);
 			fputs("InnoDB: broken FIL_PAGE_NEXT"
 			      " or FIL_PAGE_PREV links\n", stderr);
-
-			ret = false;
+                        err = DB_CORRUPTION;
 		}
 
 		rec = page_rec_get_prev(page_get_supremum_rec(page));
@@ -4724,8 +4742,7 @@ invalid_page:
 				page_get_infimum_rec(right_page));
 			rec_print(stderr, rec, index);
 			putc('\n', stderr);
-
-			ret = false;
+                        err = DB_CORRUPTION;
 		}
 	}
 
@@ -4789,8 +4806,7 @@ invalid_page:
 			fputs("InnoDB: record on page ", stderr);
 			rec_print_new(stderr, rec, offsets);
 			putc('\n', stderr);
-			ret = false;
-
+			err = DB_CORRUPTION;
 			goto node_ptr_fails;
 		}
 
@@ -4814,8 +4830,7 @@ invalid_page:
 				fputs("InnoDB: first rec ", stderr);
 				rec_print(stderr, first_rec, index);
 				putc('\n', stderr);
-				ret = false;
-
+	                        err = DB_CORRUPTION;
 				goto node_ptr_fails;
 			}
 		}
@@ -4853,7 +4868,8 @@ invalid_page:
 				right_block = btr_block_get(*index,
 							    right_page_no,
 							    RW_SX_LATCH,
-							    !level, &mtr);
+							    !level, &mtr,
+							    &err);
 				if (!right_block) {
 					btr_validate_report1(index, level,
 							     block);
@@ -4878,7 +4894,7 @@ invalid_page:
 
 				if (btr_cur_get_rec(&right_node_cur)
 				    != right_node_ptr) {
-					ret = false;
+					err = DB_CORRUPTION;
 					fputs("InnoDB: node pointer to"
 					      " the right page is wrong\n",
 					      stderr);
@@ -4894,7 +4910,7 @@ invalid_page:
 				    != page_rec_get_next(
 					    page_get_infimum_rec(
 						    right_father_page))) {
-					ret = false;
+					err = DB_CORRUPTION;
 					fputs("InnoDB: node pointer 2 to"
 					      " the right page is wrong\n",
 					      stderr);
@@ -4906,7 +4922,7 @@ invalid_page:
 				if (page_get_page_no(right_father_page)
 				    != btr_page_get_next(father_page)) {
 
-					ret = false;
+					err = DB_CORRUPTION;
 					fputs("InnoDB: node pointer 3 to"
 					      " the right page is wrong\n",
 					      stderr);
@@ -4945,13 +4961,11 @@ node_ptr_fails:
 		}
 
 		block = btr_block_get(*index, right_page_no, RW_SX_LATCH,
-				      !level, &mtr);
+				      !level, &mtr, &err);
 		goto loop;
 	}
 
-	mem_heap_free(heap);
-
-	return(ret);
+	goto func_exit;
 }
 
 /**************************************************************//**
@@ -4963,45 +4977,33 @@ btr_validate_index(
 	dict_index_t*	index,	/*!< in: index */
 	const trx_t*	trx)	/*!< in: transaction or NULL */
 {
-	dberr_t err = DB_SUCCESS;
-	bool lockout = dict_index_is_spatial(index);
+  /* Full Text index are implemented by auxiliary tables, not the B-tree */
+  if (index->online_status != ONLINE_INDEX_COMPLETE ||
+      (index->type & (DICT_FTS | DICT_CORRUPT)))
+    return DB_SUCCESS;
 
-	/* Full Text index are implemented by auxiliary tables,
-	not the B-tree */
-	if (dict_index_is_online_ddl(index) || (index->type & DICT_FTS)) {
-		return(err);
-	}
+  const bool lockout= index->is_spatial();
 
-	mtr_t		mtr;
+  mtr_t mtr;
+  mtr.start();
 
-	mtr_start(&mtr);
+  if (lockout)
+    mtr_x_lock_index(index, &mtr);
+  else
+    mtr_sx_lock_index(index, &mtr);
 
-	if (!srv_read_only_mode) {
-		if (lockout) {
-			mtr_x_lock_index(index, &mtr);
-		} else {
-			mtr_sx_lock_index(index, &mtr);
-		}
-	}
+  dberr_t err;
+  if (page_t *root= btr_root_get(index, &mtr, &err))
+    for (auto level= btr_page_get_level(root);; level--)
+    {
+      if (dberr_t err_level= btr_validate_level(index, trx, level, lockout))
+        err= err_level;
+      if (!level)
+        break;
+    }
 
-	page_t*	root = btr_root_get(index, &mtr);
-
-	if (!root) {
-		mtr_commit(&mtr);
-		return DB_CORRUPTION;
-	}
-
-	ulint	n = btr_page_get_level(root);
-
-	for (ulint i = 0; i <= n; ++i) {
-
-		if (!btr_validate_level(index, trx, n - i, lockout)) {
-			err = DB_CORRUPTION;
-		}
-	}
-
-	mtr_commit(&mtr);
-	return(err);
+  mtr.commit();
+  return err;
 }
 
 /**************************************************************//**

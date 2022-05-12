@@ -1408,8 +1408,9 @@ dummy_empty:
 
 		mtr.start();
 		mtr_s_lock_index(index, &mtr);
+		dberr_t err;
 		buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH,
-						       &mtr);
+						       &mtr, &err);
 		if (!root) {
 invalid:
 			mtr.commit();
@@ -2499,33 +2500,24 @@ static index_stats_t dict_stats_analyze_index(dict_index_t* index)
 
 	mtr.start();
 	mtr_s_lock_index(index, &mtr);
-	uint16_t root_level;
-
-	{
-		buf_block_t* root;
-		root = btr_root_block_get(index, RW_SX_LATCH, &mtr);
-		if (!root) {
+        dberr_t err;
+        buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH, &mtr, &err);
+	if (!root) {
 empty_index:
-			mtr.commit();
-			dict_stats_assert_initialized_index(index);
-			DBUG_RETURN(result);
-		}
-
-		root_level = btr_page_get_level(root->page.frame);
-
-		mtr.x_lock_space(index->table->space);
-		ulint dummy, size;
-		result.index_size
-			= fseg_n_reserved_pages(*root, PAGE_HEADER
-						+ PAGE_BTR_SEG_LEAF
-						+ root->page.frame,
-						&size, &mtr)
-			+ fseg_n_reserved_pages(*root, PAGE_HEADER
-						+ PAGE_BTR_SEG_TOP
-						+ root->page.frame,
-						&dummy, &mtr);
-		result.n_leaf_pages = size ? size : 1;
+		mtr.commit();
+		dict_stats_assert_initialized_index(index);
+		DBUG_RETURN(result);
 	}
+
+	uint16_t root_level = btr_page_get_level(root->page.frame);
+	mtr.x_lock_space(index->table->space);
+	ulint dummy, size;
+	result.index_size
+		= fseg_n_reserved_pages(*root, PAGE_HEADER + PAGE_BTR_SEG_LEAF
+					+ root->page.frame, &size, &mtr)
+		+ fseg_n_reserved_pages(*root, PAGE_HEADER + PAGE_BTR_SEG_TOP
+					+ root->page.frame, &dummy, &mtr);
+	result.n_leaf_pages = size ? size : 1;
 
 	const auto bulk_trx_id = index->table->bulk_trx_id;
 	if (bulk_trx_id && trx_sys.find(nullptr, bulk_trx_id, false)) {
@@ -2630,7 +2622,7 @@ empty_index:
 		mtr.start();
 		mtr_sx_lock_index(index, &mtr);
 		buf_block_t *root = btr_root_block_get(index, RW_S_LATCH,
-						       &mtr);
+						       &mtr, &err);
 		if (!root || root_level != btr_page_get_level(root->page.frame)
 		    || index->table->bulk_trx_id != bulk_trx_id) {
 			/* Just quit if the tree has changed beyond

@@ -365,19 +365,25 @@ static dberr_t btr_cur_instant_init_low(dict_index_t* index, mtr_t* mtr)
 	ut_ad(index->table->supports_instant());
 	ut_ad(index->table->is_readable());
 
+	dberr_t err;
 	const fil_space_t* space = index->table->space;
 	if (!space) {
+corrupted:
+		err = DB_CORRUPTION;
 unreadable:
 		ib::error() << "Table " << index->table->name
 			    << " has an unreadable root page";
 		index->table->corrupted = true;
-		return DB_CORRUPTION;
+		return err;
 	}
 
-	buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH, mtr);
-
-	if (!root || btr_cur_instant_root_init(index, root->page.frame)) {
+	buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH, mtr, &err);
+	if (!root) {
 		goto unreadable;
+	}
+
+	if (btr_cur_instant_root_init(index, root->page.frame)) {
+		goto corrupted;
 	}
 
 	ut_ad(index->n_core_null_bytes != dict_index_t::NO_CORE_NULL_BYTES);
@@ -391,8 +397,8 @@ unreadable:
 	/* Relax the assertion in rec_init_offsets(). */
 	ut_ad(!index->in_instant_init);
 	ut_d(index->in_instant_init = true);
-	dberr_t err = btr_cur_open_at_index_side(true, index, BTR_SEARCH_LEAF,
-						 &cur, 0, mtr);
+	err = btr_cur_open_at_index_side(true, index, BTR_SEARCH_LEAF,
+					 &cur, 0, mtr);
 	ut_d(index->in_instant_init = false);
 	if (err != DB_SUCCESS) {
 		index->table->corrupted = true;
@@ -3659,11 +3665,12 @@ btr_cur_pessimistic_insert(
 	lack of space */
 
 	if (!index->is_ibuf()
-	    && !fsp_reserve_free_extents(&n_reserved, index->table->space,
-					 uint32_t(cursor->tree_height / 16
-						  + 3),
-					 FSP_NORMAL, mtr)) {
-		return DB_OUT_OF_FILE_SPACE;
+	    && (err = fsp_reserve_free_extents(&n_reserved, index->table->space,
+					       uint32_t(cursor->tree_height / 16
+							+ 3),
+					       FSP_NORMAL, mtr))
+	    != DB_SUCCESS) {
+		return err;
 	}
 
 	if (page_zip_rec_needs_ext(rec_get_converted_size(index, entry, n_ext),
@@ -5000,18 +5007,17 @@ btr_cur_pessimistic_update(
 	}
 
 	if (optim_err == DB_OVERFLOW) {
-
 		/* First reserve enough free space for the file segments
 		of the index tree, so that the update will not fail because
 		of lack of space */
 
-		uint32_t n_extents = uint32_t(cursor->tree_height / 16 + 3);
-
-		if (!fsp_reserve_free_extents(
-		            &n_reserved, index->table->space, n_extents,
-		            flags & BTR_NO_UNDO_LOG_FLAG
-		            ? FSP_CLEANING : FSP_NORMAL,
-		            mtr)) {
+		err = fsp_reserve_free_extents(
+			&n_reserved, index->table->space,
+			uint32_t(cursor->tree_height / 16 + 3),
+			flags & BTR_NO_UNDO_LOG_FLAG
+			? FSP_CLEANING : FSP_NORMAL,
+			mtr);
+                if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
 			err = DB_OUT_OF_FILE_SPACE;
 			goto err_exit;
 		}
@@ -5599,7 +5605,6 @@ btr_cur_pessimistic_delete(
 	dict_index_t*	index;
 	rec_t*		rec;
 	uint32_t	n_reserved	= 0;
-	bool		success;
 	ibool		ret		= FALSE;
 	mem_heap_t*	heap;
 	rec_offs*	offsets;
@@ -5629,13 +5634,11 @@ btr_cur_pessimistic_delete(
 
 		uint32_t n_extents = uint32_t(cursor->tree_height / 32 + 1);
 
-		success = fsp_reserve_free_extents(&n_reserved,
-						   index->table->space,
-						   n_extents,
-						   FSP_CLEANING, mtr);
-		if (!success) {
-			*err = DB_OUT_OF_FILE_SPACE;
-
+		*err = fsp_reserve_free_extents(&n_reserved,
+						index->table->space,
+						n_extents,
+						FSP_CLEANING, mtr);
+		if (UNIV_UNLIKELY(*err != DB_SUCCESS)) {
 			return(FALSE);
 		}
 	}
@@ -6947,10 +6950,10 @@ btr_store_big_rec_extern_fields(
 				hint_prev = rec_block->page.id().page_no();
 			}
 
-			if (!fsp_reserve_free_extents(&r_extents,
-						      index->table->space, 1,
-						      FSP_BLOB, &mtr, 1)) {
-				error = DB_OUT_OF_FILE_SPACE;
+			error = fsp_reserve_free_extents(
+				&r_extents, index->table->space, 1,
+				FSP_BLOB, &mtr, 1);
+			if (UNIV_UNLIKELY(error != DB_SUCCESS)) {
 alloc_fail:
 				mtr.commit();
 				goto func_exit;

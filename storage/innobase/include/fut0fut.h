@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1995, 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2019, 2021, MariaDB Corporation.
+Copyright (c) 2019, 2022, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -25,9 +25,7 @@ Created 12/13/1995 Heikki Tuuri
 ***********************************************************************/
 
 
-#ifndef fut0fut_h
-#define fut0fut_h
-
+#pragma once
 #include "mtr0mtr.h"
 
 /** Gets a pointer to a file address and latches the page.
@@ -37,6 +35,8 @@ Created 12/13/1995 Heikki Tuuri
 @param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_SX_LATCH
 @param[out]	ptr_block	file page
 @param[in,out]	mtr		mini-transaction
+@param[out]	ptr_block	pointer to the block
+@param[out]	err		error code, in case !*ptr_block
 @return pointer to a byte in (*ptr_block)->frame; the *ptr_block is
 bufferfixed and latched */
 inline
@@ -47,31 +47,20 @@ fut_get_ptr(
 	fil_addr_t		addr,
 	rw_lock_type_t		rw_latch,
 	mtr_t*			mtr,
-	buf_block_t**		ptr_block = NULL)
+	buf_block_t**		ptr_block = nullptr,
+	dberr_t*		err = nullptr)
 {
-	buf_block_t*	block;
-	byte*		ptr = NULL;
+  ut_ad(addr.boffset < srv_page_size);
+  ut_ad(rw_latch == RW_S_LATCH || rw_latch == RW_X_LATCH ||
+        rw_latch == RW_SX_LATCH);
+  buf_block_t *block= buf_page_get_gen(page_id_t{space, addr.page}, zip_size,
+                                       rw_latch, nullptr,
+                                       BUF_GET_POSSIBLY_FREED, mtr, err);
+  if (!block && block->page.is_freed())
+    block= nullptr;
 
-	ut_ad(addr.boffset < srv_page_size);
-	ut_ad((rw_latch == RW_S_LATCH)
-	      || (rw_latch == RW_X_LATCH)
-	      || (rw_latch == RW_SX_LATCH));
+  if (ptr_block)
+    *ptr_block= block;
 
-	block = buf_page_get_gen(page_id_t(space, addr.page), zip_size,
-				 rw_latch, nullptr, BUF_GET_POSSIBLY_FREED,
-				 mtr);
-	if (!block) {
-	} else if (block->page.is_freed()) {
-		block = nullptr;
-	} else {
-		ptr = buf_block_get_frame(block) + addr.boffset;
-	}
-
-	if (ptr_block != NULL) {
-		*ptr_block = block;
-	}
-
-	return(ptr);
+  return block ? block->page.frame + addr.boffset : nullptr;
 }
-
-#endif /* fut0fut_h */

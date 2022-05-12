@@ -2107,9 +2107,8 @@ err_exit:
 		IF_WIN(node->find_metadata(), node->find_metadata(file, true));
 		mtr.start();
 		mtr.set_named_space(space);
-		fsp_header_init(space, size, &mtr);
+		ut_a(fsp_header_init(space, size, &mtr) == DB_SUCCESS);
 		mtr.commit();
-		*err = DB_SUCCESS;
 		return space;
 	}
 

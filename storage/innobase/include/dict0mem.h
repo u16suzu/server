@@ -1407,8 +1407,9 @@ public:
 
   /** Clear the index tree and reinitialize the root page, in the
   rollback of TRX_UNDO_EMPTY. The BTR_SEG_LEAF is freed and reinitialized.
-  @param thr query thread */
-  void clear(que_thr_t *thr);
+  @param thr query thread
+  @return error code */
+  dberr_t clear(que_thr_t *thr);
 
   /** Check whether the online log is dummy value to indicate
   whether table undergoes active DDL.
@@ -1970,8 +1971,9 @@ struct dict_table_t {
                   char (&tbl_name)[NAME_LEN + 1],
                   size_t *db_name_len, size_t *tbl_name_len) const;
 
-  /** Clear the table when rolling back TRX_UNDO_EMPTY */
-  void clear(que_thr_t *thr);
+  /** Clear the table when rolling back TRX_UNDO_EMPTY
+  @return error code */
+  dberr_t clear(que_thr_t *thr);
 
 #ifdef UNIV_DEBUG
   /** @return whether the current thread holds the lock_mutex */

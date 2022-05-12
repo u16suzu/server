@@ -967,8 +967,8 @@ func_start:
 	const uint16_t page_level = btr_page_get_level(page);
 	new_block = btr_page_alloc(cursor->index, page_id.page_no() + 1,
 				   FSP_UP, page_level, mtr, mtr, err);
-	if (!new_block) {
-		return NULL;
+	if (UNIV_UNLIKELY(!new_block)) {
+		return nullptr;
 	}
 
 	new_page_zip = buf_block_get_page_zip(new_block);
@@ -1161,7 +1161,10 @@ after_insert:
 	/* Save the new ssn to the root page, since we need to reinit
 	the first ssn value from it after restart server. */
 
-	root_block = btr_root_block_get(cursor->index, RW_SX_LATCH, mtr);
+	root_block = btr_root_block_get(cursor->index, RW_SX_LATCH, mtr, err);
+        if (UNIV_UNLIKELY(!root_block)) {
+		return nullptr;
+	}
 
 	page_zip = buf_block_get_page_zip(root_block);
 	page_set_ssn_id(root_block, page_zip, next_ssn, mtr);
@@ -1833,7 +1836,8 @@ rtr_estimate_n_rows_in_range(
 	index->set_modified(mtr);
 	mtr_s_lock_index(index, &mtr);
 
-	buf_block_t* block = btr_root_block_get(index, RW_S_LATCH, &mtr);
+	dberr_t err;
+	buf_block_t* block = btr_root_block_get(index, RW_S_LATCH, &mtr, &err);
 	if (!block) {
 err_exit:
 		mtr.commit();

@@ -233,7 +233,7 @@ func_exit:
 	if (err == DB_SUCCESS && node->rec_type == TRX_UNDO_INSERT_METADATA) {
 		/* When rolling back the very first instant ADD COLUMN
 		operation, reset the root page to the basic state. */
-		btr_reset_instant(*index, true, &mtr);
+		err = btr_reset_instant(*index, true, &mtr);
 	}
 
 	btr_pcur_commit_specify_mtr(&node->pcur, &mtr);
@@ -634,8 +634,7 @@ row_undo_ins(
 		err = row_undo_ins_remove_clust_rec(node);
 		break;
 	case TRX_UNDO_EMPTY:
-		node->table->clear(thr);
-		err = DB_SUCCESS;
+		err = node->table->clear(thr);
 		break;
 	}
 

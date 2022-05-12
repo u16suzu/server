@@ -475,7 +475,7 @@ void buf_read_page_background(fil_space_t *space, const page_id_t page_id,
 			      page_id, zip_size, false)) {
 		srv_stats.buf_pool_reads.add(1);
 	}
-
+#if 0
 	switch (err) {
 	case DB_SUCCESS:
 	case DB_ERROR:
@@ -483,7 +483,7 @@ void buf_read_page_background(fil_space_t *space, const page_id_t page_id,
 	default:
 		ib::error() << "failed to read " << page_id;
 	}
-
+#endif
 	/* We do not increment number of I/O operations used for LRU policy
 	here (buf_LRU_stat_inc_io()). We use this in heuristics to decide
 	about evicting uncompressed version of compressed pages from the

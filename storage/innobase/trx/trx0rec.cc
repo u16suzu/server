@@ -1919,9 +1919,8 @@ dberr_t trx_undo_report_rename(trx_t* trx, const dict_table_t* table)
 			} else {
 				mtr.commit();
 				mtr.start();
-				block = trx_undo_add_page(undo, &mtr);
+				block = trx_undo_add_page(undo, &mtr, &err);
 				if (!block) {
-					err = DB_OUT_OF_FILE_SPACE;
 					break;
 				}
 			}
@@ -2115,7 +2114,7 @@ err_exit:
 				}
 
 				rseg->latch.wr_lock(SRW_LOCK_CALL);
-				trx_undo_free_last_page(undo, &mtr);
+				err = trx_undo_free_last_page(undo, &mtr);
 				rseg->latch.wr_unlock();
 
 				if (m.second) {
@@ -2124,7 +2123,9 @@ err_exit:
 					trx->mod_tables.erase(m.first);
 				}
 
-				err = DB_UNDO_RECORD_TOO_BIG;
+				if (err == DB_SUCCESS) {
+					err = DB_UNDO_RECORD_TOO_BIG;
+				}
 				goto err_exit;
 			} else {
 				/* Write log for clearing the unused
@@ -2186,11 +2187,15 @@ err_exit:
 			mtr.set_log_mode(MTR_LOG_NO_REDO);
 		}
 
-		undo_block = trx_undo_add_page(undo, &mtr);
+		undo_block = trx_undo_add_page(undo, &mtr, &err);
 
 		DBUG_EXECUTE_IF("ib_err_ins_undo_page_add_failure",
 				undo_block = NULL;);
 	} while (UNIV_LIKELY(undo_block != NULL));
+
+	if (err != DB_OUT_OF_FILE_SPACE) {
+		goto err_exit;
+	}
 
 	ib_errf(trx->mysql_thd, IB_LOG_LEVEL_ERROR,
 		DB_OUT_OF_FILE_SPACE,
@@ -2202,8 +2207,6 @@ err_exit:
 		undo->rseg->space == fil_system.sys_space
 		? "system" : is_temp ? "temporary" : "undo");
 
-	/* Did not succeed: out of space */
-	err = DB_OUT_OF_FILE_SPACE;
 	goto err_exit;
 }
 

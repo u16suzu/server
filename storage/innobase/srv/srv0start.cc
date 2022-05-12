@@ -751,10 +751,12 @@ srv_undo_tablespaces_init(bool create_new_db)
     mtr_t mtr;
     for (ulint i= 0; i < srv_undo_tablespaces; ++i)
     {
-       mtr.start();
-       fsp_header_init(fil_space_get(srv_undo_space_id_start + i),
-                       SRV_UNDO_TABLESPACE_SIZE_IN_PAGES, &mtr);
-       mtr.commit();
+      mtr.start();
+      dberr_t err= fsp_header_init(fil_space_get(srv_undo_space_id_start + i),
+                                   SRV_UNDO_TABLESPACE_SIZE_IN_PAGES, &mtr);
+      mtr.commit();
+      if (err)
+        return err;
     }
   }
 
@@ -800,10 +802,13 @@ srv_open_tmp_tablespace(bool create_new_db)
 		mtr_t mtr;
 		mtr.start();
 		mtr.set_log_mode(MTR_LOG_NO_REDO);
-		fsp_header_init(fil_system.temp_space,
-				srv_tmp_space.get_sum_of_sizes(),
-				&mtr);
+		err = fsp_header_init(fil_system.temp_space,
+				      srv_tmp_space.get_sum_of_sizes(),
+				      &mtr);
 		mtr.commit();
+		if (err == DB_SUCCESS) {
+			err = trx_temp_rseg_create(&mtr);
+		}
 	} else {
 		/* This file was just opened in the code above! */
 		ib::error() << "The innodb_temporary"
@@ -1377,17 +1382,18 @@ file_checked:
 		ut_ad(fil_system.sys_space->id == 0);
 		compile_time_assert(TRX_SYS_SPACE == 0);
 		compile_time_assert(IBUF_SPACE_ID == 0);
-		fsp_header_init(fil_system.sys_space,
-				uint32_t(sum_of_new_sizes), &mtr);
+		ut_a(fsp_header_init(fil_system.sys_space,
+				     uint32_t(sum_of_new_sizes), &mtr)
+		     == DB_SUCCESS);
 
 		ulint ibuf_root = btr_create(
 			DICT_CLUSTERED | DICT_IBUF, fil_system.sys_space,
-			DICT_IBUF_ID_MIN, nullptr, &mtr);
+			DICT_IBUF_ID_MIN, nullptr, &mtr, &err);
 
 		mtr_commit(&mtr);
 
 		if (ibuf_root == FIL_NULL) {
-			return(srv_init_abort(DB_ERROR));
+			return srv_init_abort(err);
 		}
 
 		ut_ad(ibuf_root == IBUF_TREE_ROOT_PAGE_NO);
@@ -1396,8 +1402,7 @@ file_checked:
 		the first rollback segment before the double write buffer.
 		All the remaining rollback segments will be created later,
 		after the double write buffer has been created. */
-		trx_sys_create_sys_pages();
-		err = trx_lists_init_at_db_start();
+		err = trx_sys_create_sys_pages(&mtr);
 
 		if (err != DB_SUCCESS) {
 			return(srv_init_abort(err));
@@ -1845,8 +1850,6 @@ skip_monitors:
 		if (err != DB_SUCCESS) {
 			return(srv_init_abort(err));
 		}
-
-		trx_temp_rseg_create();
 
 		if (srv_force_recovery < SRV_FORCE_NO_BACKGROUND) {
 			srv_start_periodic_timer(srv_master_timer, srv_master_callback, 1000);

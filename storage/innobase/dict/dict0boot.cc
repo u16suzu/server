@@ -107,12 +107,12 @@ void dict_hdr_flush_row_id(row_id_t id)
 }
 
 /** Create the DICT_HDR page on database initialization.
-@return whether the operation failed */
-static bool dict_hdr_create()
+@return error code */
+dberr_t dict_create()
 {
 	ulint		root_page_no;
 
-	bool fail = false;
+	dberr_t err;
 	mtr_t mtr;
 	mtr.start();
 	compile_time_assert(DICT_HDR_SPACE == 0);
@@ -120,7 +120,11 @@ static bool dict_hdr_create()
 	/* Create the dictionary header file block in a new, allocated file
 	segment in the system tablespace */
 	buf_block_t* d = fseg_create(fil_system.sys_space,
-				     DICT_HDR + DICT_HDR_FSEG_HEADER, &mtr);
+				     DICT_HDR + DICT_HDR_FSEG_HEADER, &mtr,
+                                     &err);
+	if (!d) {
+		goto func_exit;
+	}
 	ut_a(d->page.id() == hdr_page_id);
 
 	/* Start counting row, table, index, and tree ids from
@@ -145,10 +149,8 @@ static bool dict_hdr_create()
 	/*--------------------------*/
 	root_page_no = btr_create(DICT_CLUSTERED | DICT_UNIQUE,
 				  fil_system.sys_space, DICT_TABLES_ID,
-				  nullptr, &mtr);
+				  nullptr, &mtr, &err);
 	if (root_page_no == FIL_NULL) {
-failed:
-		fail = true;
 		goto func_exit;
 	}
 
@@ -157,9 +159,9 @@ failed:
 	/*--------------------------*/
 	root_page_no = btr_create(DICT_UNIQUE,
 				  fil_system.sys_space, DICT_TABLE_IDS_ID,
-				  nullptr, &mtr);
+				  nullptr, &mtr, &err);
 	if (root_page_no == FIL_NULL) {
-		goto failed;
+		goto func_exit;
 	}
 
 	mtr.write<4>(*d, DICT_HDR + DICT_HDR_TABLE_IDS + d->page.frame,
@@ -167,9 +169,9 @@ failed:
 	/*--------------------------*/
 	root_page_no = btr_create(DICT_CLUSTERED | DICT_UNIQUE,
 				  fil_system.sys_space, DICT_COLUMNS_ID,
-				  nullptr, &mtr);
+				  nullptr, &mtr, &err);
 	if (root_page_no == FIL_NULL) {
-		goto failed;
+		goto func_exit;
 	}
 
 	mtr.write<4>(*d, DICT_HDR + DICT_HDR_COLUMNS + d->page.frame,
@@ -177,9 +179,9 @@ failed:
 	/*--------------------------*/
 	root_page_no = btr_create(DICT_CLUSTERED | DICT_UNIQUE,
 				  fil_system.sys_space, DICT_INDEXES_ID,
-				  nullptr, &mtr);
+				  nullptr, &mtr, &err);
 	if (root_page_no == FIL_NULL) {
-		goto failed;
+		goto func_exit;
 	}
 
 	mtr.write<4>(*d, DICT_HDR + DICT_HDR_INDEXES + d->page.frame,
@@ -187,16 +189,16 @@ failed:
 	/*--------------------------*/
 	root_page_no = btr_create(DICT_CLUSTERED | DICT_UNIQUE,
 				  fil_system.sys_space, DICT_FIELDS_ID,
-				  nullptr, &mtr);
+				  nullptr, &mtr, &err);
 	if (root_page_no == FIL_NULL) {
-		goto failed;
+		goto func_exit;
 	}
 
 	mtr.write<4>(*d, DICT_HDR + DICT_HDR_FIELDS + d->page.frame,
 		     root_page_no);
 func_exit:
 	mtr.commit();
-	return fail;
+	return err ? err : dict_boot();
 }
 
 /*****************************************************************//**
@@ -434,12 +436,4 @@ dberr_t dict_boot()
 	}
 
 	return err;
-}
-
-/*****************************************************************//**
-Creates and initializes the data dictionary at the server bootstrap.
-@return DB_SUCCESS or error code. */
-dberr_t dict_create()
-{
-  return dict_hdr_create() ? DB_ERROR : dict_boot();
 }

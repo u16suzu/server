@@ -3788,8 +3788,9 @@ dberr_t row_log_get_error(const dict_index_t *index)
   return index->online_log->error;
 }
 
-void dict_table_t::clear(que_thr_t *thr)
+dberr_t dict_table_t::clear(que_thr_t *thr)
 {
+  dberr_t err= DB_SUCCESS;
   for (dict_index_t *index= UT_LIST_GET_FIRST(indexes); index;
        index= UT_LIST_GET_NEXT(indexes, index))
   {
@@ -3807,8 +3808,10 @@ void dict_table_t::clear(que_thr_t *thr)
       MY_ASSERT_UNREACHABLE();
       break;
     }
-    index->clear(thr);
+    if (dberr_t err_index= index->clear(thr))
+      err= err_index;
   }
+  return err;
 }
 
 const rec_t *

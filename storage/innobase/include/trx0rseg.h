@@ -29,20 +29,23 @@ Created 3/26/1996 Heikki Tuuri
 #include "fut0lst.h"
 
 /** Create a rollback segment header.
-@param[in,out]	space		system, undo, or temporary tablespace
-@param[in]	rseg_id		rollback segment identifier
-@param[in]	max_trx_id	new value of TRX_RSEG_MAX_TRX_ID
-@param[in,out]	mtr		mini-transaction
+@param[in,out]  space           system, undo, or temporary tablespace
+@param[in]      rseg_id         rollback segment identifier
+@param[in]      max_trx_id      new value of TRX_RSEG_MAX_TRX_ID
+@param[in,out]  mtr             mini-transaction
+@param[out]     err             error code
 @return the created rollback segment
-@retval	NULL	on failure */
-buf_block_t* trx_rseg_header_create(fil_space_t *space, ulint rseg_id,
-                                    trx_id_t max_trx_id, mtr_t *mtr);
+@retval nullptr on failure */
+buf_block_t *trx_rseg_header_create(fil_space_t *space, ulint rseg_id,
+                                    trx_id_t max_trx_id, mtr_t *mtr,
+                                    dberr_t *err)
+  MY_ATTRIBUTE((nonnull, warn_unused_result));
 
 /** Initialize or recover the rollback segments at startup. */
 dberr_t trx_rseg_array_init();
 
 /** Create the temporary rollback segments. */
-void trx_temp_rseg_create();
+dberr_t trx_temp_rseg_create(mtr_t *mtr);
 
 /* Number of undo log slots in a rollback segment file copy */
 #define TRX_RSEG_N_SLOTS	(srv_page_size / 16)
@@ -199,7 +202,7 @@ public:
   page_id_t page_id() const { return page_id_t{space->id, page_no}; }
 
   /** @return the rollback segment header page, exclusively latched */
-  buf_block_t *get(mtr_t *mtr) const;
+  buf_block_t *get(mtr_t *mtr, dberr_t *err) const;
 
   /** @return whether the rollback segment is persistent */
   bool is_persistent() const

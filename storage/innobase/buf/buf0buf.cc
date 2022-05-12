@@ -2848,6 +2848,11 @@ re_evict:
 #endif /* UNIV_DEBUG || UNIV_IBUF_DEBUG */
 
 	ut_ad(state > buf_page_t::FREED);
+	if (UNIV_UNLIKELY(state < buf_page_t::UNFIXED)) {
+		ut_ad(mode == BUF_GET_POSSIBLY_FREED
+		      || mode == BUF_PEEK_IF_IN_POOL);
+		goto ignore_block;
+	}
 	ut_ad(state < buf_page_t::UNFIXED || (~buf_page_t::LRU_MASK) & state);
 	ut_ad(state > buf_page_t::WRITE_FIX || state < buf_page_t::READ_FIX);
 
@@ -2859,8 +2864,7 @@ re_evict:
 	with mode = BUF_PEEK_IF_IN_POOL that is invoked from
 	"btr_search_drop_page_hash_when_freed". */
 
-	if (mode != BUF_GET_POSSIBLY_FREED && mode != BUF_PEEK_IF_IN_POOL) {
-		ut_ad(state > buf_page_t::UNFIXED);
+	if (mode != BUF_GET_POSSIBLY_FREED || mode != BUF_PEEK_IF_IN_POOL) {
 		const bool not_first_access = block->page.set_accessed();
 		buf_page_make_young_if_needed(&block->page);
 		if (!not_first_access) {
