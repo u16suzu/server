@@ -28,27 +28,20 @@ Created 12/13/1995 Heikki Tuuri
 #pragma once
 #include "mtr0mtr.h"
 
+MY_ATTRIBUTE((nonnull, warn_unused_result))
 /** Gets a pointer to a file address and latches the page.
 @param[in]	space		space id
 @param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
 @param[in]	addr		file address
 @param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_SX_LATCH
-@param[out]	ptr_block	file page
 @param[in,out]	mtr		mini-transaction
 @param[out]	ptr_block	pointer to the block
 @param[out]	err		error code, in case !*ptr_block
 @return pointer to a byte in (*ptr_block)->frame; the *ptr_block is
 bufferfixed and latched */
-inline
-byte*
-fut_get_ptr(
-	ulint			space,
-	ulint			zip_size,
-	fil_addr_t		addr,
-	rw_lock_type_t		rw_latch,
-	mtr_t*			mtr,
-	buf_block_t**		ptr_block = nullptr,
-	dberr_t*		err = nullptr)
+inline byte *fut_get_ptr(ulint space, ulint zip_size, fil_addr_t addr,
+                         rw_lock_type_t rw_latch, mtr_t *mtr,
+                         buf_block_t **ptr_block, dberr_t *err)
 {
   ut_ad(addr.boffset < srv_page_size);
   ut_ad(rw_latch == RW_S_LATCH || rw_latch == RW_X_LATCH ||
@@ -56,11 +49,10 @@ fut_get_ptr(
   buf_block_t *block= buf_page_get_gen(page_id_t{space, addr.page}, zip_size,
                                        rw_latch, nullptr,
                                        BUF_GET_POSSIBLY_FREED, mtr, err);
-  if (!block && block->page.is_freed())
+  if (block && block->page.is_freed())
     block= nullptr;
 
-  if (ptr_block)
-    *ptr_block= block;
+  *ptr_block= block;
 
   return block ? block->page.frame + addr.boffset : nullptr;
 }

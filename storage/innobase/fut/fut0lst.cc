@@ -387,13 +387,15 @@ void flst_validate(const buf_block_t *base, uint16_t boffset, mtr_t *mtr)
 
   const uint32_t len= flst_get_len(base->page.frame + boffset);
   fil_addr_t addr= flst_get_first(base->page.frame + boffset);
+  dberr_t err;
+  buf_block_t *b;
 
   for (uint32_t i= len; i--; )
   {
     mtr2.start();
     const flst_node_t *node= fut_get_ptr(base->page.id().space(),
                                          base->zip_size(), addr,
-                                         RW_SX_LATCH, &mtr2);
+                                         RW_SX_LATCH, &mtr2, &b, &err);
     ut_ad(node);
     addr= flst_get_next_addr(node);
     mtr2.commit();
@@ -408,7 +410,7 @@ void flst_validate(const buf_block_t *base, uint16_t boffset, mtr_t *mtr)
     mtr2.start();
     const flst_node_t *node= fut_get_ptr(base->page.id().space(),
                                          base->zip_size(), addr,
-                                         RW_SX_LATCH, &mtr2);
+                                         RW_SX_LATCH, &mtr2, &b, &err);
     ut_ad(node);
     addr= flst_get_prev_addr(node);
     mtr2.commit();
