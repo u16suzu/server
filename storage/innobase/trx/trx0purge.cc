@@ -230,6 +230,11 @@ trx_purge_add_undo_to_history(const trx_t* trx, trx_undo_t*& undo, mtr_t* mtr)
 	trx_rseg_t*	rseg		= trx->rsegs.m_redo.rseg;
 	ut_ad(undo->rseg == rseg);
 	buf_block_t*	rseg_header	= rseg->get(mtr, nullptr);
+	/* We are in transaction commit; we cannot return an error. If the
+	database is corrupted, it is better to crash it than to
+	intentionally violate ACID by committing something that is known to
+	be corrupted. */
+	ut_ad(rseg_header);
 	buf_block_t*	undo_page	= trx_undo_set_state_at_finish(
 		undo, mtr);
 	trx_ulogf_t*	undo_header	= undo_page->page.frame
@@ -309,6 +314,11 @@ trx_purge_add_undo_to_history(const trx_t* trx, trx_undo_t*& undo, mtr_t* mtr)
 	}
 
 	/* Add the log as the first in the history list */
+
+	/* We are in transaction commit; we cannot return an error
+	when detecting corruption. It is better to crash the server
+	than to intentionally violate ACID by committing something
+	that is known to be corrupted. */
 	ut_a(flst_add_first(rseg_header, TRX_RSEG + TRX_RSEG_HISTORY, undo_page,
 			    static_cast<uint16_t>(undo->hdr_offset
 						  + TRX_UNDO_HISTORY_NODE),
@@ -374,7 +384,8 @@ static dberr_t trx_purge_free_segment(trx_rseg_t *rseg, fil_addr_t hdr_addr)
   if (!rseg_hdr)
     goto func_exit;
   if (buf_block_t *block= buf_page_get_gen(hdr_page_id, 0, RW_X_LATCH,
-                                           nullptr, BUF_GET, &mtr, &err))
+                                           nullptr, BUF_GET_POSSIBLY_FREED,
+                                           &mtr, &err))
   {
     /* Mark the last undo log totally purged, so that if the system
     crashes, the tail of the undo log will not get accessed again. The
@@ -469,7 +480,8 @@ func_exit:
 
 	buf_block_t* block = buf_page_get_gen(page_id_t(rseg.space->id,
 							hdr_addr.page),
-					      0, RW_X_LATCH, nullptr, BUF_GET,
+					      0, RW_X_LATCH, nullptr,
+					      BUF_GET_POSSIBLY_FREED,
 					      &mtr, &err);
 	if (!block) {
 		goto func_exit;
@@ -874,9 +886,10 @@ static void trx_purge_rseg_get_next_history_log(
   purge_sys.next_stored= false;
 
   if (const buf_block_t* undo_page=
-      buf_page_get(page_id_t(purge_sys.rseg->space->id,
-                             purge_sys.rseg->last_page_no),
-                   0, RW_S_LATCH, &mtr))
+      buf_page_get_gen(page_id_t(purge_sys.rseg->space->id,
+                                 purge_sys.rseg->last_page_no),
+                       0, RW_S_LATCH, nullptr,
+                       BUF_GET_POSSIBLY_FREED, &mtr))
   {
     const trx_ulogf_t *log_hdr=
       undo_page->page.frame + purge_sys.rseg->last_offset();
@@ -908,8 +921,8 @@ static void trx_purge_rseg_get_next_history_log(
   trx_id_t trx_no= 0;
 
   if (const buf_block_t* undo_page=
-      buf_page_get(page_id_t(purge_sys.rseg->space->id, prev_log_addr.page),
-                   0, RW_S_LATCH, &mtr))
+      buf_page_get_gen(page_id_t(purge_sys.rseg->space->id, prev_log_addr.page),
+                       0, RW_S_LATCH, nullptr, BUF_GET_POSSIBLY_FREED, &mtr))
   {
     const byte *log_hdr= undo_page->page.frame + prev_log_addr.boffset;
 
@@ -1034,8 +1047,9 @@ trx_purge_get_next_rec(
 
 	mtr_start(&mtr);
 
-	const buf_block_t* undo_page = buf_page_get(page_id, 0, RW_S_LATCH,
-						    &mtr);
+	const buf_block_t* undo_page
+		= buf_page_get_gen(page_id, 0, RW_S_LATCH, nullptr,
+				   BUF_GET_POSSIBLY_FREED, &mtr);
 	if (UNIV_UNLIKELY(!undo_page)) {
 corrupted:
 		mtr.commit();
@@ -1064,7 +1078,9 @@ corrupted:
 
 		mtr_start(&mtr);
 
-		undo_page = buf_page_get(page_id, 0, RW_S_LATCH, &mtr);
+		undo_page = buf_page_get_gen(page_id, 0, RW_S_LATCH,
+					     nullptr, BUF_GET_POSSIBLY_FREED,
+					     &mtr);
 		if (UNIV_UNLIKELY(!undo_page)) {
 			goto corrupted;
 		}
