@@ -924,14 +924,11 @@ ibuf_page_low(
 		not be modified by any other thread. Nobody should be
 		calling ibuf_add_free_page() or ibuf_remove_free_page()
 		while the page is linked to the insert buffer b-tree. */
-		dberr_t err = DB_SUCCESS;
-
 		buf_block_t* block = buf_page_get_gen(
 			ibuf_bitmap_page_no_calc(page_id, zip_size),
-			zip_size, RW_NO_LATCH, NULL, BUF_GET_NO_LATCH,
-			&local_mtr, &err);
+			zip_size, RW_NO_LATCH, nullptr, BUF_GET, &local_mtr);
 
-		ret = block && !block->page.is_freed()
+		ret = block
                         && ibuf_bitmap_page_get_bits_low(
 			block->page.frame, page_id, zip_size,
 			MTR_MEMO_BUF_FIX, &local_mtr, IBUF_BITMAP_IBUF);

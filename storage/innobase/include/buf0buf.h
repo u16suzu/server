@@ -49,12 +49,6 @@ Created 11/5/1995 Heikki Tuuri
 #define	BUF_GET_IF_IN_POOL	11	/*!< get if in pool */
 #define BUF_PEEK_IF_IN_POOL	12	/*!< get if in pool, do not make
 					the block young in the LRU list */
-#define BUF_GET_NO_LATCH	14	/*!< get and bufferfix, but
-					set no latch; we have
-					separated this case, because
-					it is error-prone programming
-					not to set a latch, and it
-					should be used with care */
 #define BUF_GET_IF_IN_POOL_OR_WATCH	15
 					/*!< Get the page only if it's in the
 					buffer pool, if not then set a watch
@@ -201,7 +195,7 @@ buf_page_t *buf_page_get_zip(const page_id_t page_id, ulint zip_size);
 @param[in]	rw_latch		RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
 @param[in]	guess			guessed block or NULL
 @param[in]	mode			BUF_GET, BUF_GET_IF_IN_POOL,
-BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
+BUF_PEEK_IF_IN_POOL, or BUF_GET_IF_IN_POOL_OR_WATCH
 @param[in,out]	mtr			mini-transaction
 @param[out]	err			DB_SUCCESS or error code
 @param[in]	allow_ibuf_merge	Allow change buffer merge while
@@ -225,7 +219,7 @@ buf_page_get_gen(
 @param[in]	rw_latch		RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
 @param[in]	guess			guessed block or NULL
 @param[in]	mode			BUF_GET, BUF_GET_IF_IN_POOL,
-BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
+BUF_PEEK_IF_IN_POOL, or BUF_GET_IF_IN_POOL_OR_WATCH
 @param[in,out]	mtr			mini-transaction, or NULL if a
 					block with page_id is to be evicted
 @param[out]	err			DB_SUCCESS or error code
