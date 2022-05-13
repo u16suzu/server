@@ -468,13 +468,15 @@ fseg_free_page(
 	mtr_t*		mtr,
 	bool		have_latch = false)
 	MY_ATTRIBUTE((nonnull, warn_unused_result));
-/** Determine whether a page is free.
-@param[in,out]	space	tablespace
-@param[in]	page	page number
-@return whether the page is marked as free */
-bool
-fseg_page_is_free(fil_space_t* space, unsigned page)
-	MY_ATTRIBUTE((nonnull, warn_unused_result));
+
+/** Determine whether a page is allocated.
+@param space   tablespace
+@param page    page number
+@return error code
+@retval DB_SUCCESS             if the page is marked as free
+@retval DB_SUCCESS_LOCKED_REC  if the page is marked as allocated */
+dberr_t fseg_page_is_allocated(fil_space_t *space, unsigned page)
+  MY_ATTRIBUTE((nonnull, warn_unused_result));
 
 /** Frees part of a segment. This function can be used to free
 a segment by repeatedly calling this function in different

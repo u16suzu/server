@@ -2630,7 +2630,12 @@ got_block:
 	if (state > buf_page_t::READ_FIX && state < buf_page_t::WRITE_FIX) {
 		if (mode == BUF_PEEK_IF_IN_POOL) {
 ignore_block:
+			ut_ad(mode == BUF_GET_POSSIBLY_FREED
+			      || mode == BUF_PEEK_IF_IN_POOL);
 			block->unfix();
+			if (err) {
+				*err = DB_CORRUPTION;
+			}
 			return nullptr;
 		}
 
@@ -2671,7 +2676,7 @@ ignore_block:
 		mysql_mutex_unlock(&buf_pool.mutex);
 		return nullptr;
 	} else if (UNIV_UNLIKELY(!block->page.frame)) {
-		/* This mode is only used for dropping an
+		/* The BUF_PEEK_IF_IN_POOL mode is mainly used for dropping an
 		adaptive hash index. There cannot be an
 		adaptive hash index for a compressed-only page. */
 		goto ignore_block;
@@ -2723,14 +2728,11 @@ wait_for_unfix:
 
 			if (state < buf_page_t::UNFIXED + 1) {
 				ut_ad(state > buf_page_t::FREED);
-				ut_ad(mode == BUF_GET_POSSIBLY_FREED
-				      || mode == BUF_PEEK_IF_IN_POOL);
-				block->page.unfix();
 				block->page.lock.x_unlock();
 				hash_lock.unlock();
 				buf_LRU_block_free_non_file_page(new_block);
 				mysql_mutex_unlock(&buf_pool.mutex);
-				return nullptr;
+				goto ignore_block;
 			}
 
 			mysql_mutex_unlock(&buf_pool.mutex);
@@ -2849,8 +2851,6 @@ re_evict:
 
 	ut_ad(state > buf_page_t::FREED);
 	if (UNIV_UNLIKELY(state < buf_page_t::UNFIXED)) {
-		ut_ad(mode == BUF_GET_POSSIBLY_FREED
-		      || mode == BUF_PEEK_IF_IN_POOL);
 		goto ignore_block;
 	}
 	ut_ad(state < buf_page_t::UNFIXED || (~buf_page_t::LRU_MASK) & state);
@@ -2945,7 +2945,14 @@ buf_page_get_gen(
     const bool must_merge= allow_ibuf_merge &&
       ibuf_page_exists(page_id, block->zip_size());
     if (s < buf_page_t::UNFIXED)
+    {
+    got_freed_page:
       ut_ad(mode == BUF_GET_POSSIBLY_FREED || mode == BUF_PEEK_IF_IN_POOL);
+      if (err)
+        *err= DB_CORRUPTION;
+      block->page.unfix();
+      return nullptr;
+    }
     else if (must_merge &&
              fil_page_get_type(block->page.frame) == FIL_PAGE_INDEX &&
              page_is_leaf(block->page.frame))
@@ -2955,7 +2962,10 @@ buf_page_get_gen(
       ut_ad(s > buf_page_t::FREED);
       ut_ad(s < buf_page_t::READ_FIX);
       if (s < buf_page_t::UNFIXED)
-        ut_ad(mode == BUF_GET_POSSIBLY_FREED || mode == BUF_PEEK_IF_IN_POOL);
+      {
+        block->page.lock.x_unlock();
+        goto got_freed_page;
+      }
       else
       {
         if (block->page.is_ibuf_exist())

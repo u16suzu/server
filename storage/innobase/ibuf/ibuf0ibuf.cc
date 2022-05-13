@@ -658,13 +658,9 @@ ibuf_bitmap_get_map_page(
 	ulint			zip_size,
 	mtr_t*			mtr)
 {
-  buf_block_t *block= buf_page_get_gen(ibuf_bitmap_page_no_calc(page_id,
-                                                                zip_size),
-                                       zip_size, RW_X_LATCH, nullptr,
-                                       BUF_GET_POSSIBLY_FREED, mtr);
-  if (block && block->page.is_freed())
-    block= nullptr;
-  return block;
+  return buf_page_get_gen(ibuf_bitmap_page_no_calc(page_id, zip_size),
+                          zip_size, RW_X_LATCH, nullptr,
+                          BUF_GET_POSSIBLY_FREED, mtr);
 }
 
 /************************************************************************//**
@@ -952,7 +948,7 @@ ibuf_page_low(
 
 	buf_block_t *block = ibuf_bitmap_get_map_page(page_id, zip_size,
 						      mtr);
-	ret = block && !block->page.is_freed()
+	ret = block
 		&& ibuf_bitmap_page_get_bits(block->page.frame,
 					     page_id, zip_size,
 					     IBUF_BITMAP_IBUF, mtr);
@@ -4269,8 +4265,9 @@ void ibuf_merge_or_delete_for_page(buf_block_t *block, const page_id_t page_id,
 
 		ibuf_mtr_commit(&mtr);
 
-		if (bitmap_bits && fseg_page_is_free(
-				space, page_id.page_no())) {
+		if (bitmap_bits
+		    && DB_SUCCESS
+		    == fseg_page_is_allocated(space, page_id.page_no())) {
 			ibuf_mtr_start(&mtr);
 			mtr.set_named_space(space);
 			ibuf_reset_bitmap(block, page_id, zip_size, &mtr);

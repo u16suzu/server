@@ -826,8 +826,6 @@ buf_block_t *btr_free_root_check(const page_id_t page_id, ulint zip_size,
                                        nullptr, BUF_GET_POSSIBLY_FREED, mtr);
 
   if (!block);
-  else if (block->page.is_freed())
-    block= nullptr;
   else if (fil_page_index_page_check(block->page.frame) &&
            index_id == btr_page_get_index_id(block->page.frame))
     /* This should be a root page. It should not be possible to
@@ -4566,16 +4564,19 @@ btr_validate_level(
 
 	while (level != btr_page_get_level(page)) {
 		const rec_t*	node_ptr;
-
-		if (fseg_page_is_free(space, block->page.id().page_no())) {
-
+		switch (dberr_t e =
+			fseg_page_is_allocated(space,
+					       block->page.id().page_no())) {
+		case DB_SUCCESS_LOCKED_REC:
+			break;
+		case DB_SUCCESS:
 			btr_validate_report1(index, level, block);
-
 			ib::warn() << "Page is free";
-
-			err = DB_CORRUPTION;
+			e = DB_CORRUPTION;
+			/* fall through */
+		default:
+			err = e;
 		}
-
 		ut_a(index->table->space_id == block->page.id().space());
 		ut_a(block->page.id().space() == page_get_space_id(page));
 #ifdef UNIV_ZIP_DEBUG
@@ -4657,7 +4658,8 @@ func_exit:
 	ut_a(!page_zip || page_zip_validate(page_zip, page, index));
 #endif /* UNIV_ZIP_DEBUG */
 
-	if (fseg_page_is_free(space, block->page.id().page_no())) {
+	if (DB_SUCCESS_LOCKED_REC
+	    != fseg_page_is_allocated(space, block->page.id().page_no())) {
 		btr_validate_report1(index, level, block);
 
 		ib::warn() << "Page is marked as free";

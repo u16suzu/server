@@ -43,9 +43,6 @@ Created 11/5/1995 Heikki Tuuri
 #include "transactional_lock_guard.h"
 #include <ostream>
 
-// Forward declaration
-struct fil_addr_t;
-
 /** @name Modes for buf_page_get_gen */
 /* @{ */
 #define BUF_GET			10	/*!< get always */
@@ -166,10 +163,6 @@ buf_block_free(
 /*===========*/
 	buf_block_t*	block);	/*!< in, own: block to be freed */
 
-/**************************************************************//**
-NOTE! The following macros should be used instead of buf_page_get_gen,
-to improve debugging. Only values RW_S_LATCH and RW_X_LATCH are allowed
-in LA! */
 #define buf_page_get(ID, SIZE, LA, MTR)					\
 	buf_page_get_gen(ID, SIZE, LA, NULL, BUF_GET, MTR)
 

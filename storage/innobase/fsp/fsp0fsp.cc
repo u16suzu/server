@@ -31,7 +31,6 @@ Created 11/29/1995 Heikki Tuuri
 #include "mtr0log.h"
 #include "ut0byte.h"
 #include "page0page.h"
-#include "fut0fut.h"
 #include "srv0srv.h"
 #include "srv0start.h"
 #include "ibuf0ibuf.h"
@@ -124,11 +123,13 @@ fseg_alloc_free_page_low(
 	dberr_t*		err)
 	MY_ATTRIBUTE((nonnull, warn_unused_result));
 
+MY_ATTRIBUTE((nonnull, warn_unused_result))
 /** Get the tablespace header block, SX-latched
 @param[in]      space           tablespace
 @param[in,out]  mtr             mini-transaction
 @param[out]     err             error code
-@return pointer to the space header, page x-locked */
+@return pointer to the space header, page x-locked
+@retval nullptr if the page cannot be retrieved or is corrupted */
 static buf_block_t *fsp_get_header(const fil_space_t *space, mtr_t *mtr,
                                    dberr_t *err)
 {
@@ -136,10 +137,12 @@ static buf_block_t *fsp_get_header(const fil_space_t *space, mtr_t *mtr,
                                        space->zip_size(), RW_SX_LATCH,
                                        nullptr, BUF_GET_POSSIBLY_FREED,
                                        mtr, err);
-  if (!block || block->page.is_freed())
-    return nullptr;
-  ut_ad(space->id == mach_read_from_4(FSP_HEADER_OFFSET + FSP_SPACE_ID +
-                                      block->page.frame));
+  if (block && space->id != mach_read_from_4(FSP_HEADER_OFFSET + FSP_SPACE_ID +
+                                             block->page.frame))
+  {
+    *err= DB_CORRUPTION;
+    block= nullptr;
+  }
   return block;
 }
 
@@ -369,9 +372,6 @@ xdes_get_descriptor_with_space_hdr(
 		block = buf_page_get_gen(page_id_t(space->id, descr_page_no),
 					 zip_size, RW_SX_LATCH, nullptr,
 					 BUF_GET_POSSIBLY_FREED, mtr, err);
-		if (block && block->page.is_freed()) {
-			block = nullptr;
-		}
 	}
 
 	if (desc_block != NULL) {
@@ -385,6 +385,7 @@ xdes_get_descriptor_with_space_hdr(
 		: nullptr;
 }
 
+MY_ATTRIBUTE((nonnull(1,3), warn_unused_result))
 /** Get the extent descriptor of a page.
 The page where the extent descriptor resides is x-locked. If the page
 offset is equal to the free limit of the space, we will add new
@@ -402,64 +403,12 @@ static xdes_t *xdes_get_descriptor(const fil_space_t *space, page_no_t offset,
                                    mtr_t *mtr, dberr_t *err= nullptr,
                                    buf_block_t **xdes= nullptr)
 {
-  buf_block_t *block= buf_page_get_gen(page_id_t(space->id, 0),
-                                       space->zip_size(), RW_SX_LATCH,
-                                       nullptr, BUF_GET_POSSIBLY_FREED, mtr,
-                                       err);
-  if (!block || block->page.is_freed())
-    return nullptr;
-  return xdes_get_descriptor_with_space_hdr(block, space, offset, mtr,
-                                            err, xdes);
-}
-
-/** Get the extent descriptor of a page.
-The page where the extent descriptor resides is x-locked. If the page
-offset is equal to the free limit of the space, we will add new
-extents from above the free limit to the space free list, if not free
-limit == space size. This adding is necessary to make the descriptor
-defined, as they are uninitialized above the free limit.
-@param[in]	space		tablespace
-@param[in]	page		descriptor page offset
-@param[in]	offset		page offset
-@param[in,out]	mtr		mini-transaction
-@return	the extent descriptor
-@retval	NULL	if the descriptor is not available */
-MY_ATTRIBUTE((warn_unused_result))
-static
-const xdes_t*
-xdes_get_descriptor_const(
-	const fil_space_t*	space,
-	page_no_t		page,
-	page_no_t		offset,
-	mtr_t*			mtr)
-{
-	ut_ad(space->is_owner() || mtr->memo_contains(*space, true));
-	ut_ad(offset < space->free_limit);
-	ut_ad(offset < space->size_in_header);
-
-	const ulint zip_size = space->zip_size();
-
-	if (buf_block_t* block = buf_page_get_gen(page_id_t(space->id, page),
-						  zip_size, RW_S_LATCH,
-						  nullptr,
-						  BUF_GET_POSSIBLY_FREED,
-						  mtr)) {
-		if (block->page.is_freed()) {
-			return nullptr;
-		}
-
-		ut_ad(page != 0 || space->free_limit == mach_read_from_4(
-			      FSP_FREE_LIMIT + FSP_HEADER_OFFSET
-			      + block->page.frame));
-		ut_ad(page != 0 || space->size_in_header == mach_read_from_4(
-			      FSP_SIZE + FSP_HEADER_OFFSET
-			      + block->page.frame));
-
-		return(block->page.frame + XDES_ARR_OFFSET + XDES_SIZE
-		       * xdes_calc_descriptor_index(zip_size, offset));
-	}
-
-	return(NULL);
+  if (buf_block_t *block=
+      buf_page_get_gen(page_id_t(space->id, 0), space->zip_size(), RW_SX_LATCH,
+                       nullptr, BUF_GET_POSSIBLY_FREED, mtr, err))
+    return xdes_get_descriptor_with_space_hdr(block, space, offset, mtr,
+                                              err, xdes);
+  return nullptr;
 }
 
 MY_ATTRIBUTE((nonnull(3), warn_unused_result))
@@ -477,9 +426,15 @@ xdes_t *xdes_lst_get_descriptor(const fil_space_t &space, fil_addr_t lst_node,
                                 dberr_t *err= nullptr)
 {
   ut_ad(mtr->memo_contains(space));
-  if (auto b= fut_get_ptr(space.id, space.zip_size(), lst_node, RW_SX_LATCH,
-                          mtr, block, err))
-    return b - XDES_FLST_NODE;
+  ut_ad(lst_node.boffset < space.physical_size());
+  buf_block_t *b;
+  if (!block)
+    block= &b;
+  *block= buf_page_get_gen(page_id_t{space.id, lst_node.page},
+                           space.zip_size(), RW_SX_LATCH,
+                           nullptr, BUF_GET_POSSIBLY_FREED, mtr, err);
+  if (*block)
+    return (*block)->page.frame + lst_node.boffset - XDES_FLST_NODE;
 
   fsp_metadata_corrupted(space);
   return nullptr;
@@ -963,6 +918,7 @@ fsp_fill_free_list(
   return DB_SUCCESS;
 }
 
+MY_ATTRIBUTE((nonnull, warn_unused_result))
 /** Allocates a new free extent.
 @param[in,out]	space		tablespace
 @param[in]	hint		hint of which extent would be desirable: any
@@ -1480,7 +1436,7 @@ fsp_alloc_seg_inode(fil_space_t *space, buf_block_t *header,
   buf_block_t *block=
     buf_page_get_gen(page_id, space->zip_size(), RW_SX_LATCH,
                      nullptr, BUF_GET_POSSIBLY_FREED, mtr, err);
-  if (!block || block->page.is_freed())
+  if (!block)
     return nullptr;
 
   if (!space->full_crc32())
@@ -1564,14 +1520,16 @@ static void fsp_free_seg_inode(fil_space_t *space, fseg_inode_t *inode,
     fsp_free_page(space, iblock->page.id().page_no(), mtr);
 }
 
+MY_ATTRIBUTE((nonnull(1,4,5), warn_unused_result))
 /** Returns the file segment inode, page x-latched.
 @param[in]	header		segment header
 @param[in]	space		space id
 @param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
 @param[in,out]	mtr		mini-transaction
-@param[out]	block		inode block, or NULL to ignore
+@param[out]	block		inode block
 @param[out]	err		error code
-@return segment inode, page x-latched; NULL if the inode is free */
+@return segment inode, page x-latched
+@retrval nullptr if the inode is free or corruption was noticed */
 static
 fseg_inode_t*
 fseg_inode_try_get(
@@ -1582,24 +1540,36 @@ fseg_inode_try_get(
 	buf_block_t**		block,
         dberr_t*		err = nullptr)
 {
-	fil_addr_t	inode_addr;
-	fseg_inode_t*	inode;
+  if (UNIV_UNLIKELY(space != mach_read_from_4(header + FSEG_HDR_SPACE)))
+  {
+  corrupted:
+    if (err)
+      *err= DB_CORRUPTION;
+    return nullptr;
+  }
 
-	inode_addr.page = mach_read_from_4(header + FSEG_HDR_PAGE_NO);
-	inode_addr.boffset = mach_read_from_2(header + FSEG_HDR_OFFSET);
-	ut_ad(space == mach_read_from_4(header + FSEG_HDR_SPACE));
+  buf_block_t* b;
+  if (!block)
+    block= &b;
 
-	inode = fut_get_ptr(space, zip_size, inode_addr, RW_SX_LATCH,
-			    mtr, block, err);
+  *block=
+    buf_page_get_gen(page_id_t(space,
+                               mach_read_from_4(header + FSEG_HDR_PAGE_NO)),
+                     zip_size, RW_SX_LATCH, nullptr, BUF_GET_POSSIBLY_FREED,
+                     mtr, err);
+  if (!*block)
+    return nullptr;
 
-	if (UNIV_UNLIKELY(!inode)) {
-	} else if (UNIV_UNLIKELY(!mach_read_from_8(inode + FSEG_ID))) {
-		inode = NULL;
-	} else {
-		ut_ad(!memcmp(FSEG_MAGIC_N_BYTES, FSEG_MAGIC_N + inode, 4));
-	}
+  const uint16_t offset= mach_read_from_2(header + FSEG_HDR_OFFSET);
+  if (UNIV_UNLIKELY(offset >= (*block)->physical_size()))
+    goto corrupted;
 
-	return(inode);
+  fseg_inode_t *inode= (*block)->page.frame + offset;
+  if (UNIV_UNLIKELY(!mach_read_from_8(inode + FSEG_ID) ||
+                    memcmp(FSEG_MAGIC_N_BYTES, FSEG_MAGIC_N + inode, 4)))
+    goto corrupted;
+
+  return inode;
 }
 
 /** Get the page number from the nth fragment page slot.
@@ -2669,34 +2639,46 @@ dberr_t fseg_free_page(fseg_header_t *seg_header, fil_space_t *space,
   return err;
 }
 
-/** Determine whether a page is free.
-@param[in,out]	space	tablespace
-@param[in]	page	page number
-@return whether the page is marked as free */
-bool
-fseg_page_is_free(fil_space_t* space, unsigned page)
+/** Determine whether a page is allocated.
+@param space   tablespace
+@param page    page number
+@return error code
+@retval DB_SUCCESS             if the page is marked as free
+@retval DB_SUCCESS_LOCKED_REC  if the page is marked as allocated */
+dberr_t fseg_page_is_allocated(fil_space_t *space, unsigned page)
 {
-	bool		is_free;
-	mtr_t		mtr;
-	page_no_t	dpage = xdes_calc_descriptor_page(space->zip_size(),
-							  page);
+  mtr_t mtr;
+  uint32_t dpage= xdes_calc_descriptor_page(space->zip_size(), page);
+  const unsigned zip_size= space->zip_size();
+  dberr_t err= DB_SUCCESS;
 
-	mtr.start();
-	if (!space->is_owner()) {
-		mtr.s_lock_space(space);
-	}
+  mtr.start();
+  if (!space->is_owner())
+    mtr.s_lock_space(space);
 
-	if (page >= space->free_limit || page >= space->size_in_header) {
-		is_free = true;
-	} else if (const xdes_t* descr = xdes_get_descriptor_const(
-			   space, dpage, page, &mtr)) {
-		is_free = xdes_is_free(descr, page % FSP_EXTENT_SIZE);
-	} else {
-		is_free = true;
-	}
-	mtr.commit();
+  if (page >= space->free_limit || page >= space->size_in_header);
+  else if (const buf_block_t *b=
+           buf_page_get_gen(page_id_t(space->id, dpage), space->zip_size(),
+                            RW_S_LATCH, nullptr, BUF_GET_POSSIBLY_FREED,
+                            &mtr, &err))
+  {
+    if (!dpage &&
+        (space->free_limit !=
+         mach_read_from_4(FSP_FREE_LIMIT + FSP_HEADER_OFFSET +
+                          b->page.frame) ||
+         space->size_in_header !=
+         mach_read_from_4(FSP_SIZE + FSP_HEADER_OFFSET + b->page.frame)))
+      err= DB_CORRUPTION;
+    else
+      err= xdes_is_free(b->page.frame + XDES_ARR_OFFSET + XDES_SIZE
+                        * xdes_calc_descriptor_index(zip_size, page),
+                        page & (FSP_EXTENT_SIZE - 1))
+        ? DB_SUCCESS
+        : DB_SUCCESS_LOCKED_REC;
+  }
 
-	return(is_free);
+  mtr.commit();
+  return err;
 }
 
 MY_ATTRIBUTE((nonnull, warn_unused_result))

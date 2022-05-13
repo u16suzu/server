@@ -121,8 +121,9 @@ static void flst_add_to_empty(buf_block_t *base, uint16_t boffset,
 @param[in]      aoffset byte offset of the block to be added
 @param[in,out]  mtr     mini-transaction */
 static dberr_t flst_insert_after(buf_block_t *base, uint16_t boffset,
-                              buf_block_t *cur, uint16_t coffset,
-                              buf_block_t *add, uint16_t aoffset, mtr_t *mtr)
+                                 buf_block_t *cur, uint16_t coffset,
+                                 buf_block_t *add, uint16_t aoffset,
+                                 mtr_t *mtr)
 {
   ut_ad(base != cur || boffset != coffset);
   ut_ad(base != add || boffset != aoffset);
@@ -149,15 +150,13 @@ static dberr_t flst_insert_after(buf_block_t *base, uint16_t boffset,
   if (next_addr.page == FIL_NULL)
     flst_write_addr(*base, base->page.frame + boffset + FLST_LAST,
                     add->page.id().page_no(), aoffset, mtr);
-  else
-  {
-    buf_block_t *block;
-    if (flst_node_t *next= fut_get_ptr(add->page.id().space(), add->zip_size(),
-                                       next_addr, RW_SX_LATCH,
-                                       mtr, &block, &err))
-      flst_write_addr(*block, next + FLST_PREV,
-                      add->page.id().page_no(), aoffset, mtr);
-  }
+  else if (buf_block_t *block=
+           buf_page_get_gen(page_id_t{add->page.id().space(), next_addr.page},
+                            add->zip_size(), RW_SX_LATCH, nullptr,
+                            BUF_GET_POSSIBLY_FREED, mtr, &err))
+    flst_write_addr(*block, block->page.frame +
+                    next_addr.boffset + FLST_PREV,
+                    add->page.id().page_no(), aoffset, mtr);
 
   flst_write_addr(*cur, cur->page.frame + coffset + FLST_NEXT,
                   add->page.id().page_no(), aoffset, mtr);
@@ -206,15 +205,13 @@ static dberr_t flst_insert_before(buf_block_t *base, uint16_t boffset,
   if (prev_addr.page == FIL_NULL)
     flst_write_addr(*base, base->page.frame + boffset + FLST_FIRST,
                     add->page.id().page_no(), aoffset, mtr);
-  else
-  {
-    buf_block_t *block;
-    if (flst_node_t *prev= fut_get_ptr(add->page.id().space(), add->zip_size(),
-                                       prev_addr, RW_SX_LATCH,
-                                       mtr, &block, &err))
-      flst_write_addr(*block, prev + FLST_NEXT,
-                      add->page.id().page_no(), aoffset, mtr);
-  }
+  else if (buf_block_t *block=
+           buf_page_get_gen(page_id_t{add->page.id().space(), prev_addr.page},
+                            add->zip_size(), RW_SX_LATCH, nullptr,
+                            BUF_GET_POSSIBLY_FREED, mtr, &err))
+    flst_write_addr(*block, block->page.frame +
+                    prev_addr.boffset + FLST_NEXT,
+                    add->page.id().page_no(), aoffset, mtr);
 
   flst_write_addr(*cur, cur->page.frame + coffset + FLST_PREV,
                     add->page.id().page_no(), aoffset, mtr);
@@ -253,23 +250,24 @@ dberr_t flst_add_last(buf_block_t *base, uint16_t boffset,
                                    MTR_MEMO_PAGE_SX_FIX));
   ut_ad(mtr->memo_contains_flagged(add, MTR_MEMO_PAGE_X_FIX |
                                    MTR_MEMO_PAGE_SX_FIX));
-  dberr_t err= DB_SUCCESS;
   if (!flst_get_len(base->page.frame + boffset))
+  {
     flst_add_to_empty(base, boffset, add, aoffset, mtr);
+    return DB_SUCCESS;
+  }
   else
   {
     fil_addr_t addr= flst_get_last(base->page.frame + boffset);
     buf_block_t *cur= add;
-    const flst_node_t *c= addr.page == add->page.id().page_no()
-      ? add->page.frame + addr.boffset
-      : fut_get_ptr(add->page.id().space(), add->zip_size(), addr,
-                    RW_SX_LATCH, mtr, &cur, &err);
-    if (c)
-      return flst_insert_after(base, boffset, cur,
-                               static_cast<uint16_t>(c - cur->page.frame),
-                               add, aoffset, mtr);
+    dberr_t err;
+    if (addr.page != add->page.id().page_no() &&
+        !(cur= buf_page_get_gen(page_id_t{add->page.id().space(), addr.page},
+                                add->zip_size(), RW_SX_LATCH, nullptr,
+                                BUF_GET_POSSIBLY_FREED, mtr, &err)))
+      return err;
+    return flst_insert_after(base, boffset, cur, addr.boffset,
+                             add, aoffset, mtr);
   }
-  return err;
 }
 
 /** Prepend a file list node to a list.
@@ -299,16 +297,14 @@ dberr_t flst_add_first(buf_block_t *base, uint16_t boffset,
   {
     fil_addr_t addr= flst_get_first(base->page.frame + boffset);
     buf_block_t *cur= add;
-    dberr_t err= DB_SUCCESS;
-    const flst_node_t *c= addr.page == add->page.id().page_no()
-      ? add->page.frame + addr.boffset
-      : fut_get_ptr(add->page.id().space(), add->zip_size(), addr,
-                    RW_SX_LATCH, mtr, &cur, &err);
-    if (c)
-      return flst_insert_before(base, boffset, cur,
-                                static_cast<uint16_t>(c - cur->page.frame),
-                                add, aoffset, mtr);
-    return err;
+    dberr_t err;
+    if (addr.page != add->page.id().page_no() &&
+        !(cur= buf_page_get_gen(page_id_t{add->page.id().space(), addr.page},
+                                add->zip_size(), RW_SX_LATCH, nullptr,
+                                BUF_GET_POSSIBLY_FREED, mtr, &err)))
+      return err;
+    return flst_insert_before(base, boffset, cur, addr.boffset,
+                              add, aoffset, mtr);
   }
 }
 
@@ -338,12 +334,12 @@ dberr_t flst_remove(buf_block_t *base, uint16_t boffset,
                     next_addr.page, next_addr.boffset, mtr);
   else
   {
-    buf_block_t *block= cur;
-    if (flst_node_t *prev= prev_addr.page == cur->page.id().page_no()
-        ? cur->page.frame + prev_addr.boffset
-        : fut_get_ptr(cur->page.id().space(), cur->zip_size(), prev_addr,
-                      RW_SX_LATCH, mtr, &block, &err))
-      flst_write_addr(*block, prev + FLST_NEXT,
+    if (prev_addr.page == cur->page.id().page_no() ||
+        (cur= buf_page_get_gen(page_id_t(cur->page.id().space(),
+                                         prev_addr.page),
+                               cur->zip_size(), RW_SX_LATCH, nullptr,
+                               BUF_GET_POSSIBLY_FREED, mtr, &err)))
+      flst_write_addr(*cur, cur->page.frame + prev_addr.boffset + FLST_NEXT,
                       next_addr.page, next_addr.boffset, mtr);
   }
 
@@ -352,20 +348,21 @@ dberr_t flst_remove(buf_block_t *base, uint16_t boffset,
                     prev_addr.page, prev_addr.boffset, mtr);
   else
   {
-    buf_block_t *block= cur;
     dberr_t err2;
-    if (flst_node_t *next= next_addr.page == cur->page.id().page_no()
-        ? cur->page.frame + next_addr.boffset
-        : fut_get_ptr(cur->page.id().space(), cur->zip_size(), next_addr,
-                      RW_SX_LATCH, mtr, &block, &err2))
-      flst_write_addr(*block, next + FLST_PREV,
+    if (next_addr.page == cur->page.id().page_no() ||
+        (cur= buf_page_get_gen(page_id_t(cur->page.id().space(),
+                                         next_addr.page),
+                               cur->zip_size(), RW_SX_LATCH, nullptr,
+                               BUF_GET_POSSIBLY_FREED, mtr, &err2)))
+      flst_write_addr(*cur, cur->page.frame + next_addr.boffset + FLST_PREV,
                       prev_addr.page, prev_addr.boffset, mtr);
     else if (err == DB_SUCCESS)
       err= err2;
   }
 
   byte *len= &base->page.frame[boffset + FLST_LEN];
-  ut_ad(mach_read_from_4(len) > 0);
+  if (UNIV_UNLIKELY(!mach_read_from_4(len)))
+    return DB_CORRUPTION;
   mtr->write<4>(*base, len, mach_read_from_4(len) - 1);
   return err;
 }
@@ -387,17 +384,15 @@ void flst_validate(const buf_block_t *base, uint16_t boffset, mtr_t *mtr)
 
   const uint32_t len= flst_get_len(base->page.frame + boffset);
   fil_addr_t addr= flst_get_first(base->page.frame + boffset);
-  dberr_t err;
-  buf_block_t *b;
 
   for (uint32_t i= len; i--; )
   {
     mtr2.start();
-    const flst_node_t *node= fut_get_ptr(base->page.id().space(),
-                                         base->zip_size(), addr,
-                                         RW_SX_LATCH, &mtr2, &b, &err);
-    ut_ad(node);
-    addr= flst_get_next_addr(node);
+    const buf_block_t *b=
+      buf_page_get_gen(page_id_t(base->page.id().space(), addr.page),
+                       base->zip_size(), RW_SX_LATCH, nullptr, BUF_GET, mtr);
+    ut_ad(b);
+    addr= flst_get_next_addr(b->page.frame + addr.boffset);
     mtr2.commit();
   }
 
@@ -408,11 +403,11 @@ void flst_validate(const buf_block_t *base, uint16_t boffset, mtr_t *mtr)
   for (uint32_t i= len; i--; )
   {
     mtr2.start();
-    const flst_node_t *node= fut_get_ptr(base->page.id().space(),
-                                         base->zip_size(), addr,
-                                         RW_SX_LATCH, &mtr2, &b, &err);
-    ut_ad(node);
-    addr= flst_get_prev_addr(node);
+    const buf_block_t *b=
+      buf_page_get_gen(page_id_t(base->page.id().space(), addr.page),
+                       base->zip_size(), RW_SX_LATCH, nullptr, BUF_GET, mtr);
+    ut_ad(b);
+    addr= flst_get_prev_addr(b->page.frame + addr.boffset);
     mtr2.commit();
   }
 

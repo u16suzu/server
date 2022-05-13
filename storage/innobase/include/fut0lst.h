@@ -34,7 +34,6 @@ Created 11/28/1995 Heikki Tuuri
 #ifdef UNIV_INNOCHECKSUM
 # include "fil0fil.h"
 #else
-# include "fut0fut.h"
 # include "mtr0log.h"
 
 typedef	byte	flst_base_node_t;

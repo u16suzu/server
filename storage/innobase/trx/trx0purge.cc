@@ -26,7 +26,6 @@ Created 3/26/1996 Heikki Tuuri
 
 #include "trx0purge.h"
 #include "fsp0fsp.h"
-#include "fut0fut.h"
 #include "mach0data.h"
 #include "mtr0log.h"
 #include "que0que.h"

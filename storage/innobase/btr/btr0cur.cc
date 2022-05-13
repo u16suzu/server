@@ -782,19 +782,16 @@ btr_cur_optimistic_latch_leaves(
 			*latch_mode & (RW_X_LATCH | RW_S_LATCH));
 
 		if (left_page_no != FIL_NULL) {
-			dberr_t	err;
 			cursor->left_block = buf_page_get_gen(
 				page_id_t(cursor->index->table->space_id,
 					  left_page_no),
 				cursor->index->table->space->zip_size(),
-				mode, nullptr, BUF_GET_POSSIBLY_FREED,
-				mtr, &err);
+				mode, nullptr, BUF_GET_POSSIBLY_FREED, mtr);
 
-			if (!cursor->left_block) {
-			} else if (cursor->left_block->page.is_freed()
-				   || btr_page_get_next(
-					   cursor->left_block->page.frame)
-				   != curr_page_no) {
+			if (cursor->left_block
+			    && btr_page_get_next(
+				       cursor->left_block->page.frame)
+			    != curr_page_no) {
 				/* release the left block */
 				btr_leaf_page_release(
 					cursor->left_block, mode, mtr);
@@ -4760,7 +4757,7 @@ updated record. In the split it may have inherited locks from the successor
 of the updated record, which is not correct. This function restores the
 right locks for the new supremum. */
 static
-void
+dberr_t
 btr_cur_pess_upd_restore_supremum(
 /*==============================*/
 	buf_block_t*	block,	/*!< in: buffer block of rec */
@@ -4773,26 +4770,27 @@ btr_cur_pess_upd_restore_supremum(
 
 	if (page_rec_get_next(page_get_infimum_rec(page)) != rec) {
 		/* Updated record is not the first user record on its page */
-
-		return;
+		return DB_SUCCESS;
 	}
 
 	const uint32_t	prev_page_no = btr_page_get_prev(page);
 
 	const page_id_t block_id{block->page.id()};
 	const page_id_t	prev_id(block_id.space(), prev_page_no);
-
-	ut_ad(prev_page_no != FIL_NULL);
+	dberr_t err;
 	buf_block_t* prev_block
 		= buf_page_get_gen(prev_id, 0, RW_NO_LATCH, nullptr,
-				   BUF_PEEK_IF_IN_POOL, mtr, nullptr, false);
+				   BUF_GET_POSSIBLY_FREED, mtr, &err);
 	/* Since we already held an x-latch on prev_block, it must
 	be available and not be corrupted unless the buffer pool got
 	corrupted somehow. */
-#ifdef UNIV_BTR_DEBUG
-	ut_a(btr_page_get_next(prev_block->page.frame)
-	     == block->page.id().page_no());
-#endif /* UNIV_BTR_DEBUG */
+	if (UNIV_UNLIKELY(!prev_block)) {
+		return err;
+	}
+	if (UNIV_UNLIKELY(btr_page_get_next(prev_block->page.frame)
+			  != block->page.id().page_no())) {
+		return DB_CORRUPTION;
+	}
 
 	/* We must already have an x-latch on prev_block! */
 	ut_ad(mtr->memo_contains_flagged(prev_block, MTR_MEMO_PAGE_X_FIX));
@@ -4800,6 +4798,7 @@ btr_cur_pess_upd_restore_supremum(
 	lock_rec_reset_and_inherit_gap_locks(*prev_block, block_id,
 					     PAGE_HEAP_NO_SUPREMUM,
 					     page_rec_get_heap_no(rec));
+	return DB_SUCCESS;
 }
 
 /*************************************************************//**
@@ -5241,13 +5240,14 @@ btr_cur_pessimistic_update(
 	from a wrong record. */
 
 	if (!was_first) {
-		btr_cur_pess_upd_restore_supremum(btr_cur_get_block(cursor),
-						  rec, mtr);
+		err = btr_cur_pess_upd_restore_supremum(
+			btr_cur_get_block(cursor), rec, mtr);
 	}
 
 return_after_reservations:
 #ifdef UNIV_ZIP_DEBUG
-	ut_a(!page_zip || page_zip_validate(btr_cur_get_page_zip(cursor),
+	ut_a(err ||
+	     !page_zip || page_zip_validate(btr_cur_get_page_zip(cursor),
 					    btr_cur_get_page(cursor), index));
 #endif /* UNIV_ZIP_DEBUG */
 
