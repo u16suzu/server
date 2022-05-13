@@ -296,7 +296,8 @@ fseg_mark_page_used(fseg_inode_t *seg_inode, buf_block_t *iblock,
       return err;
   }
 
-  ut_ad(xdes_is_free(descr, page % FSP_EXTENT_SIZE));
+  if (UNIV_UNLIKELY(!xdes_is_free(descr, page % FSP_EXTENT_SIZE)))
+    return DB_CORRUPTION;
 
   /* We mark the page as used */
   xdes_set_free<false>(*xdes, descr, page % FSP_EXTENT_SIZE, mtr);
@@ -603,7 +604,7 @@ fsp_try_extend_data_file_with_pages(
 	bool	success;
 	ulint	size;
 
-	ut_a(!is_system_tablespace(space->id));
+	ut_ad(!is_system_tablespace(space->id));
 	ut_d(space->modify_check(*mtr));
 
 	size = mach_read_from_4(FSP_HEADER_OFFSET + FSP_SIZE
@@ -1163,7 +1164,7 @@ buf_block_t *fsp_alloc_free_page(fil_space_t *space, uint32_t hint,
   {
     /* It must be that we are extending a single-table tablespace
     whose size is still < 64 pages */
-    ut_a(!is_system_tablespace(space_id));
+    ut_ad(!is_system_tablespace(space_id));
     if (page_no >= FSP_EXTENT_SIZE)
     {
       ib::error() << "Trying to extend "
@@ -1291,8 +1292,9 @@ static dberr_t fsp_free_page(fil_space_t *space, page_no_t offset, mtr_t *mtr)
 		mtr->write<4>(*header, FSP_HEADER_OFFSET + FSP_FRAG_N_USED
 			      + header->page.frame,
 			      frag_n_used + FSP_EXTENT_SIZE - 1);
+	} else if (UNIV_UNLIKELY(!frag_n_used)) {
+		return DB_CORRUPTION;
 	} else {
-		ut_a(frag_n_used > 0);
 		mtr->write<4>(*header, FSP_HEADER_OFFSET + FSP_FRAG_N_USED
 			      + header->page.frame, frag_n_used - 1);
 	}
@@ -1485,7 +1487,7 @@ static void fsp_free_seg_inode(fil_space_t *space, fseg_inode_t *inode,
   ut_d(space->modify_check(*mtr));
 
   dberr_t err;
-  buf_block_t *header = fsp_get_header(space, mtr, &err);
+  buf_block_t *header= fsp_get_header(space, mtr, &err);
   if (!header)
     return;
   if (UNIV_UNLIKELY(memcmp(FSEG_MAGIC_N_BYTES, FSEG_MAGIC_N + inode, 4)))
@@ -2152,7 +2154,10 @@ take_hinted_page:
 			/* Put the page in the fragment page array of the
 			segment */
 			n = fseg_find_free_frag_page_slot(seg_inode);
-			ut_a(n != ULINT_UNDEFINED);
+			if (UNIV_UNLIKELY(n == ULINT_UNDEFINED)) {
+				*err = DB_CORRUPTION;
+				return nullptr;
+			}
 
 			fseg_set_nth_frag_page_no(
 				seg_inode, iblock, n,
@@ -2709,9 +2714,12 @@ fseg_free_extent(
 		return err;
 	}
 
-	ut_a(xdes_get_state(descr) == XDES_FSEG);
-	ut_a(!memcmp(descr + XDES_ID, seg_inode + FSEG_ID, 8));
-	ut_ad(!memcmp(FSEG_MAGIC_N_BYTES, FSEG_MAGIC_N + seg_inode, 4));
+	if (UNIV_UNLIKELY(xdes_get_state(descr) != XDES_FSEG
+			  || memcmp(descr + XDES_ID, seg_inode + FSEG_ID, 8)
+			  || memcmp(FSEG_MAGIC_N_BYTES, FSEG_MAGIC_N
+				    + seg_inode, 4))) {
+		return DB_CORRUPTION;
+	}
 	ut_d(space->modify_check(*mtr));
 	const uint32_t first_page_in_extent = page - (page % FSP_EXTENT_SIZE);
 
@@ -2814,17 +2822,16 @@ fseg_free_step(
 	/* Check that the header resides on a page which has not been
 	freed yet */
 
-	ut_a(!xdes_is_free(descr, header_page % FSP_EXTENT_SIZE));
+	if (UNIV_UNLIKELY(xdes_is_free(descr,
+				       header_page & (FSP_EXTENT_SIZE - 1)))) {
+		/* Some corruption was detected: stop the freeing
+		in order to prevent a crash. */
+		DBUG_RETURN(true);
+	}
 	buf_block_t* iblock;
 	const ulint zip_size = space->zip_size();
 	inode = fseg_inode_try_get(header, space_id, zip_size, mtr, &iblock);
-	if (space->is_stopping()) {
-		DBUG_RETURN(true);
-	}
-
-	if (inode == NULL) {
-		ib::warn() << "Double free of inode from "
-			   << page_id_t(space_id, header_page);
+	if (!inode || space->is_stopping()) {
 		DBUG_RETURN(true);
 	}
 
@@ -2936,7 +2943,9 @@ fseg_free_step_not_header(
 
 	ulint n = fseg_find_last_used_frag_page_slot(inode);
 
-	ut_a(n != ULINT_UNDEFINED);
+	if (UNIV_UNLIKELY(n == ULINT_UNDEFINED)) {
+		return true;
+	}
 
 	uint32_t page_no = fseg_get_nth_frag_page_no(inode, n);
 

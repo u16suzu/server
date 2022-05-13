@@ -334,12 +334,12 @@ dberr_t flst_remove(buf_block_t *base, uint16_t boffset,
                     next_addr.page, next_addr.boffset, mtr);
   else
   {
-    if (prev_addr.page == cur->page.id().page_no() ||
-        (cur= buf_page_get_gen(page_id_t(cur->page.id().space(),
-                                         prev_addr.page),
-                               cur->zip_size(), RW_SX_LATCH, nullptr,
-                               BUF_GET_POSSIBLY_FREED, mtr, &err)))
-      flst_write_addr(*cur, cur->page.frame + prev_addr.boffset + FLST_NEXT,
+    buf_block_t *b= cur;
+    if (prev_addr.page == b->page.id().page_no() ||
+        (b= buf_page_get_gen(page_id_t(b->page.id().space(), prev_addr.page),
+                             b->zip_size(), RW_SX_LATCH, nullptr,
+                             BUF_GET_POSSIBLY_FREED, mtr, &err)))
+      flst_write_addr(*b, b->page.frame + prev_addr.boffset + FLST_NEXT,
                       next_addr.page, next_addr.boffset, mtr);
   }
 
