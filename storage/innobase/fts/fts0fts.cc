@@ -1647,24 +1647,26 @@ on the given table.
 static dberr_t fts_drop_common_tables(trx_t *trx, fts_table_t *fts_table,
                                       bool rename)
 {
-	dberr_t		error = DB_SUCCESS;
+  dberr_t error= DB_SUCCESS;
 
-	for (ulint i = 0; fts_common_tables[i] != NULL; ++i) {
-		dberr_t	err;
-		char	table_name[MAX_FULL_NAME_LEN];
+  for (ulint i= 0; fts_common_tables[i]; ++i)
+  {
+    char table_name[MAX_FULL_NAME_LEN];
 
-		fts_table->suffix = fts_common_tables[i];
-		fts_get_table_name(fts_table, table_name, true);
+    fts_table->suffix= fts_common_tables[i];
+    fts_get_table_name(fts_table, table_name, true);
 
-		err = fts_drop_table(trx, table_name, rename);
+    if (dberr_t err= fts_drop_table(trx, table_name, rename))
+    {
+      if (trx->state != TRX_STATE_ACTIVE)
+        return err;
+      /* We only return the status of the last error. */
+      if (err != DB_FAIL)
+        error= err;
+    }
+  }
 
-		/* We only return the status of the last error. */
-		if (err != DB_SUCCESS && err != DB_FAIL) {
-			error = err;
-		}
-	}
-
-	return(error);
+  return error;
 }
 
 /****************************************************************//**
