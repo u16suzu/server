@@ -507,11 +507,11 @@ btr_pcur_move_to_next_page(
 	}
 
 	const page_t* next_page = buf_block_get_frame(next_block);
-#ifdef UNIV_BTR_DEBUG
-	ut_a(page_is_comp(next_page) == page_is_comp(page));
-	ut_a(btr_page_get_prev(next_page)
-	     == btr_pcur_get_block(cursor)->page.id().page_no());
-#endif /* UNIV_BTR_DEBUG */
+
+	if (UNIV_UNLIKELY(memcmp_aligned<4>(next_page + FIL_PAGE_PREV,
+					    page + FIL_PAGE_OFFSET, 4))) {
+		return DB_CORRUPTION;
+	}
 
 	btr_leaf_page_release(btr_pcur_get_block(cursor), mode, mtr);
 

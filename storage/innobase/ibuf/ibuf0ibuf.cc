@@ -2848,12 +2848,13 @@ ibuf_get_volume_buffered(
 		return srv_page_size;
 	}
 
-#ifdef UNIV_BTR_DEBUG
 	static_assert(FIL_PAGE_NEXT % 4 == 0, "alignment");
 	static_assert(FIL_PAGE_OFFSET % 4 == 0, "alignment");
-	ut_a(!memcmp_aligned<4>(prev_page + FIL_PAGE_NEXT,
-				page + FIL_PAGE_OFFSET, 4));
-#endif /* UNIV_BTR_DEBUG */
+
+        if (UNIV_UNLIKELY(memcmp_aligned<4>(prev_page + FIL_PAGE_NEXT,
+                                            page + FIL_PAGE_OFFSET, 4))) {
+		return 0;
+        }
 
 	rec = page_get_supremum_rec(prev_page);
 	rec = page_rec_get_prev_const(rec);
@@ -2919,12 +2920,13 @@ count_later:
 		return srv_page_size;
 	}
 
-#ifdef UNIV_BTR_DEBUG
 	static_assert(FIL_PAGE_PREV % 4 == 0, "alignment");
 	static_assert(FIL_PAGE_OFFSET % 4 == 0, "alignment");
-	ut_a(!memcmp_aligned<4>(next_page + FIL_PAGE_PREV,
-				page + FIL_PAGE_OFFSET, 4));
-#endif /* UNIV_BTR_DEBUG */
+
+        if (UNIV_UNLIKELY(memcmp_aligned<4>(next_page + FIL_PAGE_PREV,
+                                            page + FIL_PAGE_OFFSET, 4))) {
+		return 0;
+        }
 
 	rec = page_get_infimum_rec(next_page);
 	rec = page_rec_get_next_const(rec);

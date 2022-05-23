@@ -533,10 +533,11 @@ update_mbr:
 	mem_heap_free(heap);
 }
 
+MY_ATTRIBUTE((nonnull, warn_unused_result))
 /**************************************************************//**
 Update parent page's MBR and Predicate lock information during a split */
-static MY_ATTRIBUTE((nonnull))
-void
+static
+dberr_t
 rtr_adjust_upper_level(
 /*===================*/
 	btr_cur_t*	sea_cur,	/*!< in: search cursor */
@@ -659,19 +660,23 @@ rtr_adjust_upper_level(
 	if (next_page_no == FIL_NULL) {
 	} else if (buf_block_t*	next_block =
 		   btr_block_get(*index, next_page_no, RW_X_LATCH,
-				 false, mtr)) {
-#ifdef UNIV_BTR_DEBUG
-		// FIXME
-		ut_a(btr_page_get_prev(next_block->page.frame)
-		     == block->page.id().page_no());
-#endif /* UNIV_BTR_DEBUG */
+				 false, mtr, &err)) {
+		if (UNIV_UNLIKELY(memcmp_aligned<4>(next_block->page.frame
+						    + FIL_PAGE_PREV,
+						    block->page.frame
+						    + FIL_PAGE_OFFSET, 4))) {
+			return DB_CORRUPTION;
+		}
 		btr_page_set_prev(next_block, new_page_no, mtr);
+	} else {
+		return err;
 	}
 
 	btr_page_set_next(block, new_page_no, mtr);
 
 	btr_page_set_prev(new_block, page_no, mtr);
 	btr_page_set_next(new_block, next_page_no, mtr);
+	return DB_SUCCESS;
 }
 
 /*************************************************************//**
@@ -682,9 +687,10 @@ if new_block is a compressed leaf page in a secondary index.
 This has to be done either within the same mini-transaction,
 or by invoking ibuf_reset_free_bits() before mtr_commit().
 
-@return TRUE on success; FALSE on compression failure */
+@return error code
+@retval DB_FAIL on ROW_FORMAT=COMPRESSED compression failure */
 static
-ibool
+dberr_t
 rtr_split_page_move_rec_list(
 /*=========================*/
 	rtr_split_node_t*	node_array,	/*!< in: split node array. */
@@ -807,7 +813,8 @@ rtr_split_page_move_rec_list(
 			still be the infimum, and we would have
 			ret_pos == 0. */
 
-			switch (page_zip_reorganize(new_block, index,
+			switch (dberr_t err =
+				page_zip_reorganize(new_block, index,
 						    page_zip_level, mtr)) {
 			case DB_FAIL:
 				if (UNIV_UNLIKELY
@@ -820,7 +827,7 @@ rtr_split_page_move_rec_list(
 #endif
 				/* fall through */
 			default:
-				return(false);
+				return err;
 			case DB_SUCCESS:
 				ret = page_rec_get_nth(new_page, ret_pos);
 			}
@@ -845,7 +852,7 @@ rtr_split_page_move_rec_list(
 		}
 	}
 
-	return(true);
+	return DB_SUCCESS;
 }
 
 /*************************************************************//**
@@ -989,10 +996,15 @@ func_start:
 #ifdef UNIV_ZIP_COPY
 	    || page_zip
 #endif
-	    || !rtr_split_page_move_rec_list(rtr_split_node_array,
-					     first_rec_group,
-					     new_block, block, first_rec,
-					     cursor->index, *heap, mtr)) {
+	    || (*err = rtr_split_page_move_rec_list(rtr_split_node_array,
+						    first_rec_group,
+						    new_block, block,
+						    first_rec, cursor->index,
+						    *heap, mtr))) {
+		if (*err != DB_FAIL) {
+			return nullptr;
+		}
+
 		ulint			n		= 0;
 		rec_t*			rec;
 		ulint			moved		= 0;
@@ -1149,8 +1161,11 @@ after_insert:
 	lock_prdt_update_split(new_block, &prdt, &new_prdt, page_id);
 
 	/* Adjust the upper level. */
-	rtr_adjust_upper_level(cursor, flags, block, new_block,
-			       &mbr, &new_mbr, mtr);
+	*err = rtr_adjust_upper_level(cursor, flags, block, new_block,
+				      &mbr, &new_mbr, mtr);
+	if (UNIV_UNLIKELY(*err != DB_SUCCESS)) {
+		return nullptr;
+	}
 
 	/* Save the new ssn to the root page, since we need to reinit
 	the first ssn value from it after restart server. */

@@ -234,7 +234,10 @@ buf_block_t *btr_block_get(const dict_index_t &index,
   {
     if (!!page_is_comp(block->page.frame) != index.table->not_redundant() ||
         btr_page_get_index_id(block->page.frame) != index.id)
+    {
+      *err= DB_PAGE_CORRUPTED;
       block= nullptr;
+    }
   }
   else if (*err == DB_DECRYPTION_FAILED)
     btr_decryption_failed(index);
@@ -2339,6 +2342,10 @@ btr_insert_on_non_leaf_level(
 	return err;
 }
 
+static_assert(FIL_PAGE_OFFSET % 4 == 0, "alignment");
+static_assert(FIL_PAGE_PREV % 4 == 0, "alignment");
+static_assert(FIL_PAGE_NEXT % 4 == 0, "alignment");
+
 MY_ATTRIBUTE((nonnull,warn_unused_result))
 /**************************************************************//**
 Attaches the halves of an index page on the appropriate level in an
@@ -2437,23 +2444,25 @@ btr_attach_half_pages(
 	/* Update page links of the level */
 
 	if (prev_block) {
-#ifdef UNIV_BTR_DEBUG
-		ut_a(page_is_comp(prev_block->page.frame)
-		     == page_is_comp(block->page.frame));
-		ut_a(btr_page_get_next(prev_block->page.frame)
-		     == block->page.id().page_no());
-#endif /* UNIV_BTR_DEBUG */
+		if (UNIV_UNLIKELY(memcmp_aligned<4>(prev_block->page.frame
+                                                    + FIL_PAGE_NEXT,
+                                                    block->page.frame
+                                                    + FIL_PAGE_OFFSET,
+                                                    4))) {
+			return DB_CORRUPTION;
+		}
 		btr_page_set_next(prev_block, lower_block->page.id().page_no(),
 				  mtr);
 	}
 
 	if (next_block) {
-#ifdef UNIV_BTR_DEBUG
-		ut_a(page_is_comp(next_block->page.frame)
-		     == page_is_comp(block->page.frame));
-		ut_a(btr_page_get_prev(next_block->page.frame)
-		     == block->page.id().page_no());
-#endif /* UNIV_BTR_DEBUG */
+		if (UNIV_UNLIKELY(memcmp_aligned<4>(next_block->page.frame
+                                                    + FIL_PAGE_PREV,
+                                                    block->page.frame
+                                                    + FIL_PAGE_OFFSET,
+                                                    4))) {
+			return DB_CORRUPTION;
+		}
 		btr_page_set_prev(next_block, upper_block->page.id().page_no(),
 				  mtr);
 	}
@@ -3164,40 +3173,38 @@ dberr_t btr_level_list_remove(const buf_block_t& block,
 	const uint32_t	next_page_no = btr_page_get_next(page);
 
 	/* Update page links of the level */
+	dberr_t err;
 
 	if (prev_page_no != FIL_NULL) {
 		buf_block_t*	prev_block = btr_block_get(
 			index, prev_page_no, RW_X_LATCH, page_is_leaf(page),
-			mtr);
-#ifdef UNIV_BTR_DEBUG
-		ut_a(page_is_comp(prev_block->page.frame)
-		     == page_is_comp(page));
-		static_assert(FIL_PAGE_NEXT % 4 == 0, "alignment");
-		static_assert(FIL_PAGE_OFFSET % 4 == 0, "alignment");
-		ut_a(!memcmp_aligned<4>(prev_block->page.frame + FIL_PAGE_NEXT,
-					page + FIL_PAGE_OFFSET, 4));
-#endif /* UNIV_BTR_DEBUG */
-
+			mtr, &err);
+		if (UNIV_UNLIKELY(!prev_block)) {
+			return err;
+		}
+		if (UNIV_UNLIKELY(memcmp_aligned<4>(prev_block->page.frame
+						    + FIL_PAGE_NEXT,
+						    page + FIL_PAGE_OFFSET,
+						    4))) {
+			return DB_CORRUPTION;
+		}
 		btr_page_set_next(prev_block, next_page_no, mtr);
 	}
 
 	if (next_page_no != FIL_NULL) {
 		buf_block_t*	next_block = btr_block_get(
 			index, next_page_no, RW_X_LATCH, page_is_leaf(page),
-			mtr);
+			mtr, &err);
 
-		if (!next_block) {
-			return DB_ERROR;
+		if (UNIV_UNLIKELY(!next_block)) {
+			return err;
 		}
-#ifdef UNIV_BTR_DEBUG
-		ut_a(page_is_comp(next_block->page.frame)
-		     == page_is_comp(page));
-		static_assert(FIL_PAGE_PREV % 4 == 0, "alignment");
-		static_assert(FIL_PAGE_OFFSET % 4 == 0, "alignment");
-		ut_a(!memcmp_aligned<4>(next_block->page.frame + FIL_PAGE_PREV,
-					page + FIL_PAGE_OFFSET, 4));
-#endif /* UNIV_BTR_DEBUG */
-
+		if (UNIV_UNLIKELY(memcmp_aligned<4>(next_block->page.frame
+						    + FIL_PAGE_PREV,
+						    page + FIL_PAGE_OFFSET,
+						    4))) {
+			return DB_CORRUPTION;
+		}
 		btr_page_set_prev(next_block, prev_page_no, mtr);
 	}
 
@@ -3514,15 +3521,14 @@ cannot_merge:
 
 	merge_page = buf_block_get_frame(merge_block);
 
-#ifdef UNIV_BTR_DEBUG
-	if (is_left) {
-		ut_a(btr_page_get_next(merge_page)
-		     == block->page.id().page_no());
-	} else {
-		ut_a(btr_page_get_prev(merge_page)
-		     == block->page.id().page_no());
+	if (UNIV_UNLIKELY(memcmp_aligned<4>(merge_page + (is_left
+							  ? FIL_PAGE_NEXT
+							  : FIL_PAGE_PREV),
+					    block->page.frame
+					    + FIL_PAGE_OFFSET, 4))) {
+		err = DB_CORRUPTION;
+		goto err_exit;
 	}
-#endif /* UNIV_BTR_DEBUG */
 
 	ut_ad(page_validate(merge_page, index));
 
@@ -3634,9 +3640,7 @@ cannot_merge:
 		btr_cur_t	cursor2;
 					/* father cursor pointing to node ptr
 					of the right sibling */
-#ifdef UNIV_BTR_DEBUG
 		byte		fil_page_prev[4];
-#endif /* UNIV_BTR_DEBUG */
 
 		if (dict_index_is_spatial(index)) {
 			cursor2.rtr_info = NULL;
@@ -3668,9 +3672,7 @@ cannot_merge:
 			requires that FIL_PAGE_PREV be FIL_NULL.
 			Clear the field, but prepare to restore it. */
 			static_assert(FIL_PAGE_PREV % 8 == 0, "alignment");
-#ifdef UNIV_BTR_DEBUG
 			memcpy(fil_page_prev, merge_page + FIL_PAGE_PREV, 4);
-#endif /* UNIV_BTR_DEBUG */
 			compile_time_assert(FIL_NULL == 0xffffffffU);
 			memset_aligned<4>(merge_page + FIL_PAGE_PREV, 0xff, 4);
 		}
@@ -3681,20 +3683,17 @@ cannot_merge:
 
 		if (!orig_succ) {
 			ut_a(merge_page_zip);
-#ifdef UNIV_BTR_DEBUG
 			if (left_page_no == FIL_NULL) {
 				/* FIL_PAGE_PREV was restored from
 				merge_page_zip. */
-				ut_a(!memcmp(fil_page_prev,
-					     merge_page + FIL_PAGE_PREV, 4));
+				ut_ad(!memcmp(fil_page_prev,
+					      merge_page + FIL_PAGE_PREV, 4));
 			}
-#endif /* UNIV_BTR_DEBUG */
 			goto err_exit;
 		}
 
 		btr_search_drop_page_hash_index(block);
 
-#ifdef UNIV_BTR_DEBUG
 		if (merge_page_zip && left_page_no == FIL_NULL) {
 
 			/* Restore FIL_PAGE_PREV in order to avoid an assertion
@@ -3705,7 +3704,6 @@ cannot_merge:
 			are X-latched. */
 			memcpy(merge_page + FIL_PAGE_PREV, fil_page_prev, 4);
 		}
-#endif /* UNIV_BTR_DEBUG */
 
 		/* Remove the page from the level list */
 		err = btr_level_list_remove(*block, *index, mtr);
@@ -4032,12 +4030,20 @@ btr_discard_page(
 
 	ut_d(bool parent_is_different = false);
 	if (left_page_no != FIL_NULL) {
+		dberr_t err;
 		merge_block = btr_block_get(*index, left_page_no, RW_X_LATCH,
-					    true, mtr);
-#ifdef UNIV_BTR_DEBUG
-		ut_a(btr_page_get_next(merge_block->page.frame)
-		     == block->page.id().page_no());
-#endif /* UNIV_BTR_DEBUG */
+					    true, mtr, &err);
+		if (UNIV_UNLIKELY(!merge_block)) {
+			return err;
+		}
+
+		if (UNIV_UNLIKELY(memcmp_aligned<4>(merge_block->page.frame
+						    + FIL_PAGE_NEXT,
+						    block->page.frame
+						    + FIL_PAGE_OFFSET, 4))) {
+			return DB_CORRUPTION;
+		}
+
 		ut_d(parent_is_different =
 			(page_rec_get_next(
 				page_get_infimum_rec(
@@ -4045,12 +4051,19 @@ btr_discard_page(
 						&parent_cursor)))
 			 == btr_cur_get_rec(&parent_cursor)));
 	} else if (right_page_no != FIL_NULL) {
+		dberr_t err;
 		merge_block = btr_block_get(*index, right_page_no, RW_X_LATCH,
-					    true, mtr);
-#ifdef UNIV_BTR_DEBUG
-		ut_a(btr_page_get_prev(merge_block->page.frame)
-		     == block->page.id().page_no());
-#endif /* UNIV_BTR_DEBUG */
+					    true, mtr, &err);
+		if (UNIV_UNLIKELY(!merge_block)) {
+			return err;
+		}
+		if (UNIV_UNLIKELY(memcmp_aligned<4>(merge_block->page.frame
+						    + FIL_PAGE_PREV,
+						    block->page.frame
+						    + FIL_PAGE_OFFSET, 4))) {
+			return DB_CORRUPTION;
+		}
+
 		ut_d(parent_is_different = page_rec_is_supremum(
 			page_rec_get_next(btr_cur_get_rec(&parent_cursor))));
 		if (!page_is_leaf(merge_block->page.frame)) {
@@ -4067,12 +4080,13 @@ btr_discard_page(
 		return DB_SUCCESS;
 	}
 
-	ut_a(page_is_comp(merge_block->page.frame)
-	     == page_is_comp(block->page.frame));
-	ut_ad(!memcmp_aligned<2>(&merge_block->page.frame
-				 [PAGE_HEADER + PAGE_LEVEL],
-				 &block->page.frame
-				 [PAGE_HEADER + PAGE_LEVEL], 2));
+	if (UNIV_UNLIKELY(memcmp_aligned<2>(&merge_block->page.frame
+					    [PAGE_HEADER + PAGE_LEVEL],
+					    &block->page.frame
+					    [PAGE_HEADER + PAGE_LEVEL], 2))) {
+		return DB_CORRUPTION;
+	}
+
 	btr_search_drop_page_hash_index(block);
 
 	if (dict_index_is_spatial(index)) {
@@ -4853,10 +4867,13 @@ func_exit:
 		}
 	}
 
-	if (level > 0 && left_page_no == FIL_NULL) {
-		ut_a(REC_INFO_MIN_REC_FLAG & rec_get_info_bits(
-			     page_rec_get_next(page_get_infimum_rec(page)),
-			     page_is_comp(page)));
+	if (level > 0 && left_page_no == FIL_NULL
+            && !(REC_INFO_MIN_REC_FLAG & rec_get_info_bits(
+			 page_rec_get_next(page_get_infimum_rec(page)),
+			 page_is_comp(page)))) {
+		btr_validate_report1(index, level, block);
+		ib::error() << "Missing REC_INFO_MIN_REC_FLAG";
+		err = DB_CORRUPTION;
 	}
 
 	/* Similarly skip the father node check for spatial index for now,
