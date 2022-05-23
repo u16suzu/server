@@ -4771,18 +4771,17 @@ btr_cur_pess_upd_restore_supremum(
 	const page_id_t	prev_id(block_id.space(), prev_page_no);
 	dberr_t err;
 	buf_block_t* prev_block
-		= buf_page_get_gen(prev_id, 0, RW_NO_LATCH, nullptr,
-				   BUF_GET_POSSIBLY_FREED, mtr, &err);
+		= buf_page_get_gen(prev_id, 0, RW_NO_LATCH,
+				   nullptr, BUF_PEEK_IF_IN_POOL, mtr, &err);
 	/* Since we already held an x-latch on prev_block, it must
 	be available and not be corrupted unless the buffer pool got
 	corrupted somehow. */
 	if (UNIV_UNLIKELY(!prev_block)) {
 		return err;
 	}
-	if (UNIV_UNLIKELY(btr_page_get_next(prev_block->page.frame)
-			  != block->page.id().page_no())) {
-		return DB_CORRUPTION;
-	}
+
+	ut_ad(!memcmp_aligned<4>(prev_block->page.frame + FIL_PAGE_NEXT,
+				 block->page.frame + FIL_PAGE_OFFSET, 4));
 
 	/* We must already have an x-latch on prev_block! */
 	ut_ad(mtr->memo_contains_flagged(prev_block, MTR_MEMO_PAGE_X_FIX));
