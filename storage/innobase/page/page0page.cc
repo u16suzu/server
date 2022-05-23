@@ -455,8 +455,10 @@ touch the lock table and max trx id on page or compress the page.
 IMPORTANT: The caller will have to update IBUF_BITMAP_FREE
 if new_block is a compressed leaf page in a secondary index.
 This has to be done either within the same mini-transaction,
-or by invoking ibuf_reset_free_bits() before mtr_commit(). */
-void
+or by invoking ibuf_reset_free_bits() before mtr_commit().
+
+@return error code */
+dberr_t
 page_copy_rec_list_end_no_locks(
 /*============================*/
 	buf_block_t*	new_block,	/*!< in: index page to copy to */
@@ -486,6 +488,7 @@ page_copy_rec_list_end_no_locks(
 	const ulint n_core = page_is_leaf(block->page.frame)
 		? index->n_core_fields : 0;
 
+	dberr_t err = DB_SUCCESS;
 	page_cur_set_before_first(new_block, &cur2);
 
 	/* Copy records from the original page to the new page */
@@ -497,9 +500,8 @@ page_copy_rec_list_end_no_locks(
 		ins_rec = page_cur_insert_rec_low(&cur2, index,
 						  cur1.rec, offsets, mtr);
 		if (UNIV_UNLIKELY(!ins_rec)) {
-			ib::fatal() << "Rec offset " << page_offset(rec)
-				<< ", cur1 offset " << page_offset(cur1.rec)
-				<< ", cur2 offset " << page_offset(cur2.rec);
+			err = DB_CORRUPTION;
+			break;
 		}
 
 		page_cur_move_to_next(&cur1);
@@ -511,6 +513,8 @@ page_copy_rec_list_end_no_locks(
 	if (UNIV_LIKELY_NULL(heap)) {
 		mem_heap_free(heap);
 	}
+
+	return err;
 }
 
 /*************************************************************//**
@@ -521,10 +525,10 @@ The records are copied to the start of the record list on new_page.
 IMPORTANT: The caller will have to update IBUF_BITMAP_FREE
 if new_block is a compressed leaf page in a secondary index.
 This has to be done either within the same mini-transaction,
-or by invoking ibuf_reset_free_bits() before mtr_commit().
+or by invoking ibuf_reset_free_bits() before mtr_t::commit().
 
-@return pointer to the original successor of the infimum record on
-new_page, or NULL on zip overflow (new_block will be decompressed) */
+@return pointer to the original successor of the infimum record on new_block
+@retval nullptr on ROW_FORMAT=COMPRESSED page overflow */
 rec_t*
 page_copy_rec_list_end(
 /*===================*/
@@ -532,7 +536,8 @@ page_copy_rec_list_end(
 	buf_block_t*	block,		/*!< in: index page containing rec */
 	rec_t*		rec,		/*!< in: record on page */
 	dict_index_t*	index,		/*!< in: record descriptor */
-	mtr_t*		mtr)		/*!< in: mtr */
+	mtr_t*		mtr,		/*!< in/out: mini-transaction */
+	dberr_t*	err)		/*!< out: error code */
 {
 	page_t*		new_page	= new_block->page.frame;
 	page_zip_des_t*	new_page_zip	= buf_block_get_page_zip(new_block);
@@ -587,8 +592,11 @@ page_copy_rec_list_end(
 						    &num_moved,
 						    mtr);
 	} else {
-		page_copy_rec_list_end_no_locks(new_block, block, rec,
-						index, mtr);
+		*err = page_copy_rec_list_end_no_locks(new_block, block, rec,
+						       index, mtr);
+		if (UNIV_UNLIKELY(*err != DB_SUCCESS)) {
+			return nullptr;
+		}
 		if (was_empty) {
 			mtr->memcpy<mtr_t::MAYBE_NOP>(*new_block, PAGE_HEADER
 						      + PAGE_LAST_INSERT
@@ -629,21 +637,22 @@ page_copy_rec_list_end(
 			that is smaller than "ret"). */
 			ut_a(ret_pos > 0);
 
-			if (!page_zip_reorganize(new_block, index,
-						 page_zip_level, mtr)) {
-
+			*err = page_zip_reorganize(new_block, index,
+						   page_zip_level, mtr);
+			switch (*err) {
+			case DB_FAIL:
 				if (!page_zip_decompress(new_page_zip,
 							 new_page, FALSE)) {
 					ut_error;
 				}
 				ut_ad(page_validate(new_page, index));
-
+				/* fall through */
+			default:
 				if (heap) {
 					mem_heap_free(heap);
 				}
-
-				return(NULL);
-			} else {
+				return nullptr;
+			case DB_SUCCESS:
 				/* The page was reorganized:
 				Seek to ret_pos. */
 				ret = page_rec_get_nth(new_page, ret_pos);
@@ -679,8 +688,8 @@ if new_block is a compressed leaf page in a secondary index.
 This has to be done either within the same mini-transaction,
 or by invoking ibuf_reset_free_bits() before mtr_commit().
 
-@return pointer to the original predecessor of the supremum record on
-new_page, or NULL on zip overflow (new_block will be decompressed) */
+@return pointer to the original predecessor of the supremum record on new_block
+@retval nullptr on ROW_FORMAT=COMPRESSED page overflow */
 rec_t*
 page_copy_rec_list_start(
 /*=====================*/
@@ -688,7 +697,8 @@ page_copy_rec_list_start(
 	buf_block_t*	block,		/*!< in: index page containing rec */
 	rec_t*		rec,		/*!< in: record on page */
 	dict_index_t*	index,		/*!< in: record descriptor */
-	mtr_t*		mtr)		/*!< in: mtr */
+	mtr_t*		mtr,		/*!< in/out: mini-transaction */
+	dberr_t*	err)		/*!< out: error code */
 {
 	ut_ad(page_align(rec) == block->page.frame);
 
@@ -709,6 +719,7 @@ page_copy_rec_list_start(
 	predefined infimum record. */
 
 	if (page_rec_is_infimum(rec)) {
+		*err = DB_SUCCESS;
 		return(ret);
 	}
 
@@ -750,7 +761,10 @@ page_copy_rec_list_start(
 			cur2.rec = page_cur_insert_rec_low(&cur2, index,
 							   cur1.rec, offsets,
 							   mtr);
-			ut_a(cur2.rec);
+			if (UNIV_UNLIKELY(!cur2.rec)) {
+				*err = DB_CORRUPTION;
+				return nullptr;
+			}
 
 			page_cur_move_to_next(&cur1);
 			ut_ad(!(rec_get_info_bits(cur1.rec,
@@ -782,39 +796,38 @@ page_copy_rec_list_start(
 
 		if (!page_zip_compress(new_block, index,
 				       page_zip_level, mtr)) {
-			ulint	ret_pos;
 #ifndef DBUG_OFF
 zip_reorganize:
 #endif /* DBUG_OFF */
 			/* Before trying to reorganize the page,
 			store the number of preceding records on the page. */
-			ret_pos = page_rec_get_n_recs_before(ret);
+			ulint ret_pos = page_rec_get_n_recs_before(ret);
 			/* Before copying, "ret" was the predecessor
 			of the predefined supremum record.  If it was
 			the predefined infimum record, then it would
 			still be the infimum, and we would have
 			ret_pos == 0. */
-
-			if (UNIV_UNLIKELY
-			    (!page_zip_reorganize(new_block, index,
-						  page_zip_level, mtr))) {
-
+			*err = page_zip_reorganize(new_block, index,
+						   page_zip_level, mtr);
+			switch (*err) {
+			case DB_SUCCESS:
+				ret = page_rec_get_nth(new_page, ret_pos);
+				break;
+			case DB_FAIL:
 				if (UNIV_UNLIKELY
 				    (!page_zip_decompress(new_page_zip,
 							  new_page, FALSE))) {
 					ut_error;
 				}
 				ut_ad(page_validate(new_page, index));
-
+				/* fall through */
+			default:
 				if (UNIV_LIKELY_NULL(heap)) {
 					mem_heap_free(heap);
 				}
 
-				return(NULL);
+				return nullptr;
 			}
-
-			/* The page was reorganized: Seek to ret_pos. */
-			ret = page_rec_get_nth(new_page, ret_pos);
 		}
 	}
 
@@ -833,6 +846,7 @@ zip_reorganize:
 
 	btr_search_move_or_delete_hash_entries(new_block, block);
 
+	*err = DB_SUCCESS;
 	return(ret);
 }
 
@@ -1112,97 +1126,6 @@ page_delete_rec_list_start(
 	if (UNIV_LIKELY_NULL(heap)) {
 		mem_heap_free(heap);
 	}
-}
-
-/*************************************************************//**
-Moves record list end to another page. Moved records include
-split_rec.
-
-IMPORTANT: The caller will have to update IBUF_BITMAP_FREE
-if new_block is a compressed leaf page in a secondary index.
-This has to be done either within the same mini-transaction,
-or by invoking ibuf_reset_free_bits() before mtr_commit().
-
-@return TRUE on success; FALSE on compression failure (new_block will
-be decompressed) */
-ibool
-page_move_rec_list_end(
-/*===================*/
-	buf_block_t*	new_block,	/*!< in/out: index page where to move */
-	buf_block_t*	block,		/*!< in: index page from where to move */
-	rec_t*		split_rec,	/*!< in: first record to move */
-	dict_index_t*	index,		/*!< in: record descriptor */
-	mtr_t*		mtr)		/*!< in: mtr */
-{
-	page_t*		new_page	= buf_block_get_frame(new_block);
-	ulint		old_data_size;
-	ulint		new_data_size;
-	ulint		old_n_recs;
-	ulint		new_n_recs;
-
-	ut_ad(!dict_index_is_spatial(index));
-
-	old_data_size = page_get_data_size(new_page);
-	old_n_recs = page_get_n_recs(new_page);
-#ifdef UNIV_ZIP_DEBUG
-	{
-		page_zip_des_t*	new_page_zip
-			= buf_block_get_page_zip(new_block);
-		page_zip_des_t*	page_zip
-			= buf_block_get_page_zip(block);
-		ut_a(!new_page_zip == !page_zip);
-		ut_a(!new_page_zip
-		     || page_zip_validate(new_page_zip, new_page, index));
-		ut_a(!page_zip
-		     || page_zip_validate(page_zip, page_align(split_rec),
-					  index));
-	}
-#endif /* UNIV_ZIP_DEBUG */
-
-	if (UNIV_UNLIKELY(!page_copy_rec_list_end(new_block, block,
-						  split_rec, index, mtr))) {
-		return(FALSE);
-	}
-
-	new_data_size = page_get_data_size(new_page);
-	new_n_recs = page_get_n_recs(new_page);
-
-	ut_ad(new_data_size >= old_data_size);
-
-	page_delete_rec_list_end(split_rec, block, index,
-				 new_n_recs - old_n_recs,
-				 new_data_size - old_data_size, mtr);
-
-	return(TRUE);
-}
-
-/*************************************************************//**
-Moves record list start to another page. Moved records do not include
-split_rec.
-
-IMPORTANT: The caller will have to update IBUF_BITMAP_FREE
-if new_block is a compressed leaf page in a secondary index.
-This has to be done either within the same mini-transaction,
-or by invoking ibuf_reset_free_bits() before mtr_commit().
-
-@return TRUE on success; FALSE on compression failure */
-ibool
-page_move_rec_list_start(
-/*=====================*/
-	buf_block_t*	new_block,	/*!< in/out: index page where to move */
-	buf_block_t*	block,		/*!< in/out: page containing split_rec */
-	rec_t*		split_rec,	/*!< in: first record not to move */
-	dict_index_t*	index,		/*!< in: record descriptor */
-	mtr_t*		mtr)		/*!< in: mtr */
-{
-	if (UNIV_UNLIKELY(!page_copy_rec_list_start(new_block, block,
-						    split_rec, index, mtr))) {
-		return(FALSE);
-	}
-
-	page_delete_rec_list_start(split_rec, block, index, mtr);
-
-	return(TRUE);
 }
 
 /************************************************************//**

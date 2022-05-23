@@ -3116,9 +3116,10 @@ row_log_apply_op_low(
 				goto func_exit;
 			}
 
-			if (btr_cur_optimistic_delete(
-				    &cursor, BTR_CREATE_FLAG, &mtr)) {
-				*error = DB_SUCCESS;
+			*error = btr_cur_optimistic_delete(
+				&cursor, BTR_CREATE_FLAG, &mtr);
+
+			if (*error != DB_FAIL) {
 				break;
 			}
 

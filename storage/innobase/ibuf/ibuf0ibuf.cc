@@ -3625,12 +3625,13 @@ skip_watch:
 	DBUG_RETURN(err == DB_SUCCESS);
 }
 
+MY_ATTRIBUTE((nonnull, warn_unused_result))
 /********************************************************************//**
 During merge, inserts to an index page a secondary index entry extracted
 from the insert buffer.
-@return	newly inserted record */
-static MY_ATTRIBUTE((nonnull))
-rec_t*
+@return	error code */
+static
+dberr_t
 ibuf_insert_to_index_page_low(
 /*==========================*/
 	const dtuple_t*	entry,	/*!< in: buffered entry to insert */
@@ -3643,66 +3644,31 @@ ibuf_insert_to_index_page_low(
 	page_cur_t*	page_cur)/*!< in/out: cursor positioned on the record
 				after which to insert the buffered entry */
 {
-	rec_t*		rec;
-	DBUG_ENTER("ibuf_insert_to_index_page_low");
+  if (page_cur_tuple_insert(page_cur, entry, index, offsets, &heap, 0, mtr))
+    return DB_SUCCESS;
 
-	rec = page_cur_tuple_insert(page_cur, entry, index,
-				    offsets, &heap, 0, mtr);
-	if (rec != NULL) {
-		DBUG_RETURN(rec);
-	}
+  /* Page reorganization or recompression should already have been
+  attempted by page_cur_tuple_insert(). Besides, per
+  ibuf_index_page_calc_free_zip() the page should not have been
+  recompressed or reorganized. */
+  ut_ad(!is_buf_block_get_page_zip(block));
 
-	/* Page reorganization or recompression should already have
-	been attempted by page_cur_tuple_insert(). Besides, per
-	ibuf_index_page_calc_free_zip() the page should not have been
-	recompressed or reorganized. */
-	ut_ad(!is_buf_block_get_page_zip(block));
+  /* If the record did not fit, reorganize */
+  if (dberr_t err= btr_page_reorganize(page_cur, index, mtr))
+    return err;
 
-	/* If the record did not fit, reorganize */
+  /* This time the record must fit */
+  if (page_cur_tuple_insert(page_cur, entry, index, offsets, &heap, 0, mtr))
+    return DB_SUCCESS;
 
-	btr_page_reorganize(page_cur, index, mtr);
-
-	/* This time the record must fit */
-
-	rec = page_cur_tuple_insert(page_cur, entry, index,
-				    offsets, &heap, 0, mtr);
-	if (rec != NULL) {
-		DBUG_RETURN(rec);
-	}
-
-	ib::error() << "Insert buffer insert fails; page free "
-		    << page_get_max_insert_size(block->page.frame, 1)
-		    << ", dtuple size "
-		    << rec_get_converted_size(index, entry, 0);
-
-	fputs("InnoDB: Cannot insert index record ", stderr);
-	dtuple_print(stderr, entry);
-	fputs("\nInnoDB: The table where this index record belongs\n"
-	      "InnoDB: is now probably corrupt. Please run CHECK TABLE on\n"
-	      "InnoDB: that table.\n", stderr);
-
-	if (buf_block_t *bitmap_page =  ibuf_bitmap_get_map_page(
-			block->page.id(), block->zip_size(), mtr)) {
-
-		ib::error() << "page " << block->page.id() << ", size "
-			    << block->physical_size() << ", bitmap bits "
-			    << ibuf_bitmap_page_get_bits(
-				    bitmap_page->page.frame,
-				    block->page.id(), block->zip_size(),
-				    IBUF_BITMAP_FREE, mtr);
-	}
-
-	ib::error() << BUG_REPORT_MSG;
-
-	ut_ad(0);
-	DBUG_RETURN(NULL);
+  return DB_CORRUPTION;
 }
 
 /************************************************************************
 During merge, inserts to an index page a secondary index entry extracted
 from the insert buffer. */
 static
-void
+dberr_t
 ibuf_insert_to_index_page(
 /*======================*/
 	const dtuple_t*	entry,	/*!< in: buffered entry to insert */
@@ -3717,8 +3683,6 @@ ibuf_insert_to_index_page(
 	rec_t*		rec;
 	rec_offs*	offsets;
 	mem_heap_t*	heap;
-
-	DBUG_ENTER("ibuf_insert_to_index_page");
 
 	DBUG_PRINT("ibuf", ("page " UINT32PF ":" UINT32PF,
 			    block->page.id().space(),
@@ -3738,37 +3702,20 @@ ibuf_insert_to_index_page(
 
 	if (UNIV_UNLIKELY(dict_table_is_comp(index->table)
 			  != (ibool)!!page_is_comp(page))) {
-		ib::warn() << "Trying to insert a record from the insert"
-			" buffer to an index page but the 'compact' flag does"
-			" not match!";
-		goto dump;
+		return DB_CORRUPTION;
 	}
 
 	rec = page_rec_get_next(page_get_infimum_rec(page));
 
 	if (page_rec_is_supremum(rec)) {
-		ib::warn() << "Trying to insert a record from the insert"
-			" buffer to an index page but the index page"
-			" is empty!";
-		goto dump;
+		return DB_CORRUPTION;
 	}
 
 	if (!rec_n_fields_is_sane(index, rec, entry)) {
-		ib::warn() << "Trying to insert a record from the insert"
-			" buffer to an index page but the number of fields"
-			" does not match!";
-		rec_print(stderr, rec, index);
-dump:
-		dtuple_print(stderr, entry);
-		ut_ad(0);
-
-		ib::warn() << "The table where this index record belongs"
-			" is now probably corrupt. Please run CHECK TABLE on"
-			" your tables. " << BUG_REPORT_MSG;
-
-		DBUG_VOID_RETURN;
+		return DB_CORRUPTION;
 	}
 
+	dberr_t err = DB_SUCCESS;
 	low_match = page_cur_search(block, index, entry, &page_cur);
 
 	heap = mem_heap_create(
@@ -3853,21 +3800,16 @@ dump:
 
 		page_cur_delete_rec(&page_cur, index, offsets, mtr);
 		page_cur_move_to_prev(&page_cur);
-		rec = ibuf_insert_to_index_page_low(entry, block, index,
-				      		    &offsets, heap, mtr,
-						    &page_cur);
-
-		ut_ad(!cmp_dtuple_rec(entry, rec, offsets));
 	} else {
 		offsets = NULL;
-		ibuf_insert_to_index_page_low(entry, block, index,
-					      &offsets, heap, mtr,
-					      &page_cur);
-	}
+        }
+
+	err = ibuf_insert_to_index_page_low(entry, block, index,
+					    &offsets, heap, mtr, &page_cur);
 updated_in_place:
 	mem_heap_free(heap);
 
-	DBUG_VOID_RETURN;
+	return err;
 }
 
 /****************************************************************//**
@@ -4081,8 +4023,11 @@ bool ibuf_delete_rec(const page_id_t page_id, btr_pcur_t* pcur,
 	ut_ad(ibuf_rec_get_space(mtr, btr_pcur_get_rec(pcur))
 	      == page_id.space());
 
-	if (btr_cur_optimistic_delete(btr_pcur_get_btr_cur(pcur),
-				      BTR_CREATE_FLAG, mtr)) {
+	switch (btr_cur_optimistic_delete(btr_pcur_get_btr_cur(pcur),
+					  BTR_CREATE_FLAG, mtr)) {
+	case DB_FAIL:
+		break;
+	case DB_SUCCESS:
 		if (page_is_empty(btr_pcur_get_page(pcur))) {
 			/* If a B-tree page is empty, it must be the root page
 			and the whole B-tree must be empty. InnoDB does not
@@ -4098,7 +4043,8 @@ bool ibuf_delete_rec(const page_id_t page_id, btr_pcur_t* pcur,
 			ut_ad(!ibuf.empty);
 			ibuf.empty = true;
 		}
-
+		/* fall through */
+	default:
 		return(FALSE);
 	}
 

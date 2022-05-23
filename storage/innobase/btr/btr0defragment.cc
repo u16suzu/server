@@ -283,7 +283,8 @@ btr_defragment_calc_n_recs_for_size(
 /*************************************************************//**
 Merge as many records from the from_block to the to_block. Delete
 the from_block if all records are successfully merged to to_block.
-@return the to_block to target for next merge operation. */
+@return the to_block to target for next merge operation.
+@retval nullptr if corruption was noticed */
 static
 buf_block_t*
 btr_defragment_merge_pages(
@@ -330,9 +331,9 @@ btr_defragment_merge_pages(
 	// reorganizing the page, otherwise we need to reorganize the page
 	// first to release more space.
 	if (move_size > max_ins_size) {
-		if (!btr_page_reorganize_block(page_zip_level,
-					       to_block, index,
-					       mtr)) {
+		dberr_t err = btr_page_reorganize_block(page_zip_level,
+                                                        to_block, index, mtr);
+		if (err != DB_SUCCESS) {
 			if (!dict_index_is_clust(index)
 			    && page_is_leaf(to_page)) {
 				ibuf_reset_free_bits(to_block);
@@ -341,23 +342,30 @@ btr_defragment_merge_pages(
 			// not compressable. There's no point to try
 			// merging into this page. Continue to the
 			// next page.
-			return from_block;
+			return err == DB_FAIL ? from_block : nullptr;
 		}
 		ut_ad(page_validate(to_page, index));
 		max_ins_size = page_get_max_insert_size(to_page, n_recs);
-		ut_a(max_ins_size >= move_size);
+		if (max_ins_size < move_size) {
+			return nullptr;
+		}
 	}
 
 	// Move records to pack to_page more full.
 	orig_pred = NULL;
 	target_n_recs = n_recs_to_move;
+	dberr_t err;
 	while (n_recs_to_move > 0) {
 		rec = page_rec_get_nth(from_page,
 					n_recs_to_move + 1);
 		orig_pred = page_copy_rec_list_start(
-			to_block, from_block, rec, index, mtr);
+			to_block, from_block, rec, index, mtr, &err);
 		if (orig_pred)
 			break;
+		if (err != DB_FAIL) {
+			return nullptr;
+		}
+
 		// If we reach here, that means compression failed after packing
 		// n_recs_to_move number of records to to_page. We try to reduce
 		// the targeted data size on the to_page by
@@ -408,8 +416,6 @@ btr_defragment_merge_pages(
 		    != DB_SUCCESS
 		    || btr_cur_node_ptr_delete(&parent, mtr) != DB_SUCCESS
 		    || btr_page_free(index, from_block, mtr) != DB_SUCCESS) {
-corrupted:
-			dict_set_corrupted(index, "defragment");
 			return nullptr;
 		}
 	} else {
@@ -429,7 +435,7 @@ corrupted:
 			// FIXME: reuse the node_ptr!
 			if (btr_cur_node_ptr_delete(&parent, mtr)
 			    != DB_SUCCESS) {
-				goto corrupted;
+				return nullptr;
 			}
 			rec = page_rec_get_next(
 				page_get_infimum_rec(from_page));
@@ -439,7 +445,7 @@ corrupted:
 			if (btr_insert_on_non_leaf_level(0, index, level+1,
                                                          node_ptr, mtr)
                             != DB_SUCCESS) {
-				goto corrupted;
+				return nullptr;
                         }
 		}
 		to_block = from_block;
@@ -528,7 +534,8 @@ btr_defragment_n_pages(
 				return NULL;
 			/* given page is the last page.
 			Lift the records to father. */
-			btr_lift_page_up(index, block, mtr);
+			dberr_t err;
+			btr_lift_page_up(index, block, mtr, &err);
 		}
 		return NULL;
 	}
@@ -591,6 +598,9 @@ btr_defragment_n_pages(
 		if (new_block != current_block) {
 			n_defragmented ++;
 			current_block = new_block;
+			if (!new_block) {
+				break;
+			}
 		}
 	}
 	mem_heap_free(heap);

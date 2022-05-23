@@ -1231,8 +1231,8 @@ btr_write_autoinc(dict_index_t* index, ib_uint64_t autoinc, bool reset)
 @param cursor      index page cursor
 @param index       the index that the cursor belongs to
 @param mtr         mini-transaction */
-static void btr_page_reorganize_low(page_cur_t *cursor, dict_index_t *index,
-                                    mtr_t *mtr)
+static dberr_t btr_page_reorganize_low(page_cur_t *cursor, dict_index_t *index,
+                                       mtr_t *mtr)
 {
   const mtr_log_t log_mode= mtr->set_log_mode(MTR_LOG_NO_REDO);
 
@@ -1266,9 +1266,11 @@ static void btr_page_reorganize_low(page_cur_t *cursor, dict_index_t *index,
   /* Copy the records from the temporary space to the recreated page;
   do not copy the lock bits yet */
 
-  page_copy_rec_list_end_no_locks(block, old,
-                                  page_get_infimum_rec(old->page.frame),
-                                  index, mtr);
+  if (dberr_t err=
+      page_copy_rec_list_end_no_locks(block, old,
+                                      page_get_infimum_rec(old->page.frame),
+                                      index, mtr))
+    return err;
 
   /* Copy the PAGE_MAX_TRX_ID or PAGE_ROOT_AUTO_INC. */
   ut_ad(!page_get_max_trx_id(block->page.frame));
@@ -1482,6 +1484,7 @@ static void btr_page_reorganize_low(page_cur_t *cursor, dict_index_t *index,
 
   MONITOR_INC(MONITOR_INDEX_REORG_ATTEMPTS);
   MONITOR_INC(MONITOR_INDEX_REORG_SUCCESSFUL);
+  return DB_SUCCESS;
 }
 
 /*************************************************************//**
@@ -1493,9 +1496,9 @@ be done either within the same mini-transaction, or by invoking
 ibuf_reset_free_bits() before mtr_commit(). On uncompressed pages,
 IBUF_BITMAP_FREE is unaffected by reorganization.
 
-@retval true if the operation was successful
-@retval false if it is a compressed page, and recompression failed */
-bool
+@return error code
+@retval DB_FAIL if reorganizing a ROW_FORMAT=COMPRESSED page failed */
+dberr_t
 btr_page_reorganize_block(
 	ulint		z_level,/*!< in: compression level to be used
 				if dealing with compressed page */
@@ -1503,15 +1506,11 @@ btr_page_reorganize_block(
 	dict_index_t*	index,	/*!< in: the index tree of the page */
 	mtr_t*		mtr)	/*!< in/out: mini-transaction */
 {
-	if (buf_block_get_page_zip(block)) {
-		return page_zip_reorganize(block, index, z_level, mtr, true);
-	}
-
-	page_cur_t	cur;
-	page_cur_set_before_first(block, &cur);
-
-	btr_page_reorganize_low(&cur, index, mtr);
-	return true;
+  if (buf_block_get_page_zip(block))
+    return page_zip_reorganize(block, index, z_level, mtr, true);
+  page_cur_t cur;
+  page_cur_set_before_first(block, &cur);
+  return btr_page_reorganize_low(&cur, index, mtr);
 }
 
 /*************************************************************//**
@@ -1523,33 +1522,28 @@ be done either within the same mini-transaction, or by invoking
 ibuf_reset_free_bits() before mtr_commit(). On uncompressed pages,
 IBUF_BITMAP_FREE is unaffected by reorganization.
 
-@retval true if the operation was successful
-@retval false if it is a compressed page, and recompression failed */
-bool
+@return error code
+@retval DB_FAIL if reorganizing a ROW_FORMAT=COMPRESSED page failed */
+dberr_t
 btr_page_reorganize(
 /*================*/
 	page_cur_t*	cursor,	/*!< in/out: page cursor */
 	dict_index_t*	index,	/*!< in: the index tree of the page */
 	mtr_t*		mtr)	/*!< in/out: mini-transaction */
 {
-	if (!buf_block_get_page_zip(cursor->block)) {
-		btr_page_reorganize_low(cursor, index, mtr);
-		return true;
-	}
+  if (!buf_block_get_page_zip(cursor->block))
+    return btr_page_reorganize_low(cursor, index, mtr);
 
-	ulint pos = page_rec_get_n_recs_before(cursor->rec);
-	if (!page_zip_reorganize(cursor->block, index, page_zip_level, mtr,
-				 true)) {
-		return false;
-	}
-	if (pos) {
-		cursor->rec = page_rec_get_nth(cursor->block->page.frame, pos);
-	} else {
-		ut_ad(cursor->rec == page_get_infimum_rec(
-			      cursor->block->page.frame));
-	}
+  ulint pos= page_rec_get_n_recs_before(cursor->rec);
+  dberr_t err= page_zip_reorganize(cursor->block, index, page_zip_level, mtr,
+                                   true);
+  if (err == DB_FAIL);
+  else if (pos)
+    cursor->rec= page_rec_get_nth(cursor->block->page.frame, pos);
+  else
+    ut_ad(cursor->rec == page_get_infimum_rec(cursor->block->page.frame));
 
-	return true;
+  return err;
 }
 
 /** Empty an index page (possibly the root page). @see btr_page_create().
@@ -1815,6 +1809,10 @@ btr_root_raise_and_insert(
 	}
 
 	/* Copy the records from root to the new page one by one. */
+	dberr_t e;
+	if (!err) {
+		err = &e;
+	}
 
 	if (0
 #ifdef UNIV_ZIP_COPY
@@ -1822,7 +1820,11 @@ btr_root_raise_and_insert(
 #endif /* UNIV_ZIP_COPY */
 	    || !page_copy_rec_list_end(new_block, root,
 				       page_get_infimum_rec(root->page.frame),
-				       index, mtr)) {
+				       index, mtr, err)) {
+		if (*err != DB_SUCCESS && *err != DB_FAIL) {
+			return nullptr;
+		}
+
 		ut_a(new_page_zip);
 
 		/* Copy the page byte for byte. */
@@ -2614,7 +2616,7 @@ btr_insert_into_right_sibling(
 	}
 
 	if (!compressed) {
-		btr_cur_compress_if_useful(&next_father_cursor, FALSE, mtr);
+		btr_cur_compress_if_useful(&next_father_cursor, false, mtr);
 	}
 
 	dtuple_t*	node_ptr = dict_index_build_node_ptr(
@@ -2644,6 +2646,95 @@ btr_insert_into_right_sibling(
 	}
 
 	return(rec);
+}
+
+/*************************************************************//**
+Moves record list end to another page. Moved records include
+split_rec.
+
+IMPORTANT: The caller will have to update IBUF_BITMAP_FREE
+if new_block is a compressed leaf page in a secondary index.
+This has to be done either within the same mini-transaction,
+or by invoking ibuf_reset_free_bits() before mtr_commit().
+
+@return error code */
+static
+dberr_t
+page_move_rec_list_end(
+/*===================*/
+	buf_block_t*	new_block,	/*!< in/out: index page where to move */
+	buf_block_t*	block,		/*!< in: index page from where to move */
+	rec_t*		split_rec,	/*!< in: first record to move */
+	dict_index_t*	index,		/*!< in: record descriptor */
+	mtr_t*		mtr)		/*!< in: mtr */
+{
+	page_t*		new_page	= buf_block_get_frame(new_block);
+	ulint		old_data_size;
+	ulint		new_data_size;
+	ulint		old_n_recs;
+	ulint		new_n_recs;
+
+	ut_ad(!dict_index_is_spatial(index));
+
+	old_data_size = page_get_data_size(new_page);
+	old_n_recs = page_get_n_recs(new_page);
+#ifdef UNIV_ZIP_DEBUG
+	{
+		page_zip_des_t*	new_page_zip
+			= buf_block_get_page_zip(new_block);
+		page_zip_des_t*	page_zip
+			= buf_block_get_page_zip(block);
+		ut_a(!new_page_zip == !page_zip);
+		ut_a(!new_page_zip
+		     || page_zip_validate(new_page_zip, new_page, index));
+		ut_a(!page_zip
+		     || page_zip_validate(page_zip, page_align(split_rec),
+					  index));
+	}
+#endif /* UNIV_ZIP_DEBUG */
+
+	dberr_t err;
+	if (!page_copy_rec_list_end(new_block, block,
+				    split_rec, index, mtr, &err)) {
+		return err;
+	}
+
+	new_data_size = page_get_data_size(new_page);
+	new_n_recs = page_get_n_recs(new_page);
+
+	ut_ad(new_data_size >= old_data_size);
+
+	page_delete_rec_list_end(split_rec, block, index,
+				 new_n_recs - old_n_recs,
+				 new_data_size - old_data_size, mtr);
+
+	return DB_SUCCESS;
+}
+
+/*************************************************************//**
+Moves record list start to another page. Moved records do not include
+split_rec.
+
+IMPORTANT: The caller will have to update IBUF_BITMAP_FREE
+if new_block is a compressed leaf page in a secondary index.
+This has to be done either within the same mini-transaction,
+or by invoking ibuf_reset_free_bits() before mtr_commit().
+
+@return error code */
+static
+dberr_t
+page_move_rec_list_start(
+/*=====================*/
+	buf_block_t*	new_block,	/*!< in/out: index page where to move */
+	buf_block_t*	block,		/*!< in/out: page containing split_rec */
+	rec_t*		split_rec,	/*!< in: first record not to move */
+	dict_index_t*	index,		/*!< in: record descriptor */
+	mtr_t*		mtr)		/*!< in: mtr */
+{
+  dberr_t err;
+  if (page_copy_rec_list_start(new_block, block, split_rec, index, mtr, &err))
+    page_delete_rec_list_start(split_rec, block, index, mtr);
+  return err;
 }
 
 /*************************************************************//**
@@ -2861,9 +2952,14 @@ insert_empty:
 #ifdef UNIV_ZIP_COPY
 		    || page_zip
 #endif /* UNIV_ZIP_COPY */
-		    || !page_move_rec_list_start(new_block, block, move_limit,
-						 cursor->index, mtr)) {
-			/* For some reason, compressing new_page failed,
+		    || (*err = page_move_rec_list_start(new_block, block,
+							move_limit,
+							cursor->index, mtr))) {
+			if (*err != DB_FAIL) {
+				return nullptr;
+			}
+
+			/* For some reason, compressing new_block failed,
 			even though it should contain fewer records than
 			the original page.  Copy the page byte for byte
 			and then delete the records from both pages
@@ -2906,8 +3002,13 @@ insert_empty:
 #ifdef UNIV_ZIP_COPY
 		    || page_zip
 #endif /* UNIV_ZIP_COPY */
-		    || !page_move_rec_list_end(new_block, block, move_limit,
-					       cursor->index, mtr)) {
+		    || (*err = page_move_rec_list_end(new_block, block,
+						      move_limit,
+						      cursor->index, mtr))) {
+			if (*err != DB_FAIL) {
+				return nullptr;
+			}
+
 			/* For some reason, compressing new_page failed,
 			even though it should contain fewer records than
 			the original page.  Copy the page byte for byte
@@ -2993,10 +3094,14 @@ insert_empty:
 	For compressed pages, page_cur_tuple_insert() will have
 	attempted this already. */
 
-	if (page_cur_get_page_zip(page_cursor)
-	    || !btr_page_reorganize(page_cursor, cursor->index, mtr)) {
-
+	if (page_cur_get_page_zip(page_cursor)) {
 		goto insert_failed;
+	}
+
+	*err = btr_page_reorganize(page_cursor, cursor->index, mtr);
+
+	if (*err != DB_SUCCESS) {
+		return nullptr;
 	}
 
 	rec = page_cur_tuple_insert(page_cursor, tuple, cursor->index,
@@ -3110,7 +3215,8 @@ btr_lift_page_up(
 				must not be empty: use
 				btr_discard_only_page_on_level if the last
 				record from the page should be removed */
-	mtr_t*		mtr)	/*!< in: mtr */
+	mtr_t*		mtr,	/*!< in/out: mini-transaction */
+	dberr_t*	err)	/*!< out: error code */
 {
 	buf_block_t*	father_block;
 	ulint		page_level;
@@ -3223,7 +3329,11 @@ btr_lift_page_up(
 #endif /* UNIV_ZIP_COPY */
 	    || !page_copy_rec_list_end(father_block, block,
 				       page_get_infimum_rec(page),
-				       index, mtr)) {
+				       index, mtr, err)) {
+		if (*err != DB_SUCCESS && *err != DB_FAIL) {
+			return nullptr;
+		}
+
 		const page_zip_des_t*	page_zip
 			= buf_block_get_page_zip(block);
 		ut_a(father_page_zip);
@@ -3293,16 +3403,16 @@ level lifts the records of the page to the father page, thus reducing the
 tree height. It is assumed that mtr holds an x-latch on the tree and on the
 page. If cursor is on the leaf level, mtr must also hold x-latches to the
 brothers, if they exist.
-@return TRUE on success */
-ibool
+@return error code */
+dberr_t
 btr_compress(
 /*=========*/
 	btr_cur_t*	cursor,	/*!< in/out: cursor on the page to merge
 				or lift; the page must not be empty:
 				when deleting records, use btr_discard_page()
 				if the page would become empty */
-	ibool		adjust,	/*!< in: TRUE if should adjust the
-				cursor position even if compression occurs */
+	bool		adjust,	/*!< in: whether the cursor position should be
+				adjusted even when compression occurs */
 	mtr_t*		mtr)	/*!< in/out: mini-transaction */
 {
 	dict_index_t*	index;
@@ -3334,14 +3444,12 @@ btr_compress(
 
 	const uint32_t left_page_no = btr_page_get_prev(page);
 	const uint32_t right_page_no = btr_page_get_next(page);
+	dberr_t err = DB_SUCCESS;
 
-#ifdef UNIV_DEBUG
-	if (!page_is_leaf(page) && left_page_no == FIL_NULL) {
-		ut_a(REC_INFO_MIN_REC_FLAG & rec_get_info_bits(
-			page_rec_get_next(page_get_infimum_rec(page)),
-			page_is_comp(page)));
-	}
-#endif /* UNIV_DEBUG */
+	ut_ad(page_is_leaf(page) || left_page_no != FIL_NULL
+	      || (REC_INFO_MIN_REC_FLAG & rec_get_info_bits(
+			  page_rec_get_next(page_get_infimum_rec(page)),
+			  page_is_comp(page))));
 
 	heap = mem_heap_create(100);
 
@@ -3374,7 +3482,7 @@ btr_compress(
 		/* The page is the only one on the level, lift the records
 		to the father */
 
-		merge_block = btr_lift_page_up(index, block, mtr);
+		merge_block = btr_lift_page_up(index, block, mtr, &err);
 		goto func_exit;
 	}
 
@@ -3399,6 +3507,8 @@ retry:
 		if (!merge_block) {
 			merge_page = NULL;
 		}
+cannot_merge:
+		err = DB_FAIL;
 		goto err_exit;
 	}
 
@@ -3464,7 +3574,7 @@ retry:
 
 		rec_t*	orig_pred = page_copy_rec_list_start(
 			merge_block, block, page_get_supremum_rec(page),
-			index, mtr);
+			index, mtr, &err);
 
 		if (!orig_pred) {
 			goto err_exit;
@@ -3473,7 +3583,9 @@ retry:
 		btr_search_drop_page_hash_index(block);
 
 		/* Remove the page from the level list */
-		if (DB_SUCCESS != btr_level_list_remove(*block, *index, mtr)) {
+		err = btr_level_list_remove(*block, *index, mtr);
+
+		if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
 			goto err_exit;
 		}
 
@@ -3502,8 +3614,8 @@ retry:
 			/* No GAP lock needs to be worrying about */
 			lock_sys.prdt_page_free_from_discard(id);
 		} else {
-			if (btr_cur_node_ptr_delete(&father_cursor, mtr)
-			    != DB_SUCCESS) {
+			err = btr_cur_node_ptr_delete(&father_cursor, mtr);
+			if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
 				goto err_exit;
 			}
 			if (index->has_locking()) {
@@ -3537,7 +3649,7 @@ retry:
 				index, &cursor2,
 				btr_cur_get_block(&father_cursor),
 				merge_block, heap)) {
-				goto err_exit;
+				goto cannot_merge;
 			}
 
 			/* Set rtr_info for cursor2, since it is
@@ -3546,7 +3658,7 @@ retry:
 			cursor2.tree_height = cursor->tree_height;
 		} else if (!btr_page_get_father(index, merge_block, mtr,
 						&cursor2)) {
-			goto err_exit;
+			goto cannot_merge;
 		}
 
 		if (merge_page_zip && left_page_no == FIL_NULL) {
@@ -3565,7 +3677,7 @@ retry:
 
 		orig_succ = page_copy_rec_list_end(merge_block, block,
 						   page_get_infimum_rec(page),
-						   cursor->index, mtr);
+						   cursor->index, mtr, &err);
 
 		if (!orig_succ) {
 			ut_a(merge_page_zip);
@@ -3596,7 +3708,9 @@ retry:
 #endif /* UNIV_BTR_DEBUG */
 
 		/* Remove the page from the level list */
-		if (DB_SUCCESS != btr_level_list_remove(*block, *index, mtr)) {
+		err = btr_level_list_remove(*block, *index, mtr);
+
+		if (UNIV_UNLIKELY(err != DB_SUCCESS)) {
 			goto err_exit;
 		}
 
@@ -3667,8 +3781,7 @@ retry:
 			ut_a(err == DB_SUCCESS);
 
 			if (!compressed) {
-				btr_cur_compress_if_useful(&cursor2,
-							   FALSE,
+				btr_cur_compress_if_useful(&cursor2, false,
 							   mtr);
 			}
 
@@ -3733,41 +3846,33 @@ retry:
 	}
 
 	/* Free the file page */
-	if (btr_page_free(index, block, mtr) != DB_SUCCESS) {
-		goto err_exit;
-	}
-
-	/* btr_check_node_ptr() needs parent block latched.
-	If the merge_block's parent block is not same,
-	we cannot use btr_check_node_ptr() */
-	ut_ad(leftmost_child
-	      || btr_check_node_ptr(index, merge_block, mtr));
+	err = btr_page_free(index, block, mtr);
+        if (err == DB_SUCCESS) {
+		ut_ad(leftmost_child
+		      || btr_check_node_ptr(index, merge_block, mtr));
 func_exit:
-	mem_heap_free(heap);
+		MONITOR_INC(MONITOR_INDEX_MERGE_SUCCESSFUL);
 
-	if (adjust) {
-		ut_ad(nth_rec > 0);
-		btr_cur_position(
-			index,
-			page_rec_get_nth(merge_block->page.frame, nth_rec),
-			merge_block, cursor);
-	}
-
-	MONITOR_INC(MONITOR_INDEX_MERGE_SUCCESSFUL);
-
-	DBUG_RETURN(TRUE);
-
+		if (adjust) {
+			ut_ad(nth_rec > 0);
+			btr_cur_position(
+				index,
+				page_rec_get_nth(merge_block->page.frame,
+                                                 nth_rec),
+                                merge_block, cursor);
+                }
+        } else {
 err_exit:
-	/* We play it safe and reset the free bits. */
-	if (merge_block && merge_block->zip_size()
-	    && page_is_leaf(merge_block->page.frame)
-	    && !dict_index_is_clust(index)) {
-
-		ibuf_reset_free_bits(merge_block);
-	}
+		/* We play it safe and reset the free bits. */
+		if (merge_block && merge_block->zip_size()
+                    && page_is_leaf(merge_block->page.frame)
+                    && !index->is_clust()) {
+			ibuf_reset_free_bits(merge_block);
+                }
+        }
 
 	mem_heap_free(heap);
-	DBUG_RETURN(FALSE);
+	DBUG_RETURN(err);
 }
 
 /*************************************************************//**
@@ -3891,7 +3996,7 @@ btr_discard_only_page_on_level(
 Discards a page from a B-tree. This is used to remove the last record from
 a B-tree page: the whole page must be removed at the same time. This cannot
 be used for the root page, which is allowed to be empty. */
-void
+dberr_t
 btr_discard_page(
 /*=============*/
 	btr_cur_t*	cursor,	/*!< in: cursor on the page to discard: not on
@@ -3917,7 +4022,7 @@ btr_discard_page(
 	if (index->is_spatial()
 	    ? !rtr_page_get_father(index, block, mtr, cursor, &parent_cursor)
 	    : !btr_page_get_father(index, block, mtr, &parent_cursor)) {
-		return;
+		return DB_CORRUPTION;
 	}
 
 	/* Decide the page which will inherit the locks */
@@ -3959,8 +4064,7 @@ btr_discard_page(
 		}
 	} else {
 		btr_discard_only_page_on_level(index, block, mtr);
-
-		return;
+		return DB_SUCCESS;
 	}
 
 	ut_a(page_is_comp(merge_block->page.frame)
@@ -3973,16 +4077,14 @@ btr_discard_page(
 
 	if (dict_index_is_spatial(index)) {
 		rtr_node_ptr_delete(&parent_cursor, mtr);
-	} else {
-		if (btr_cur_node_ptr_delete(&parent_cursor, mtr)
-		    != DB_SUCCESS) {
-			return;
-		}
+	} else if (dberr_t err =
+		   btr_cur_node_ptr_delete(&parent_cursor, mtr)) {
+		return err;
 	}
 
 	/* Remove the page from the level list */
-	if (btr_level_list_remove(*block, *index, mtr) != DB_SUCCESS) {
-		return;
+	if (dberr_t err = btr_level_list_remove(*block, *index, mtr)) {
+		return err;
 	}
 
 #ifdef UNIV_ZIP_DEBUG
@@ -4011,22 +4113,25 @@ btr_discard_page(
 	}
 
 	/* Free the file page */
-	if (btr_page_free(index, block, mtr) != DB_SUCCESS) {
-		return;
+	dberr_t err = btr_page_free(index, block, mtr);
+
+	if (err == DB_SUCCESS) {
+		/* btr_check_node_ptr() needs parent block latched.
+		If the merge_block's parent block is not same,
+		we cannot use btr_check_node_ptr() */
+		ut_ad(parent_is_different
+		      || btr_check_node_ptr(index, merge_block, mtr));
+
+		if (btr_cur_get_block(&parent_cursor)->page.id().page_no()
+		    == index->page
+		    && !page_has_siblings(btr_cur_get_page(&parent_cursor))
+		    && page_get_n_recs(btr_cur_get_page(&parent_cursor))
+		    == 1) {
+			btr_lift_page_up(index, merge_block, mtr, &err);
+		}
 	}
 
-	/* btr_check_node_ptr() needs parent block latched.
-	If the merge_block's parent block is not same,
-	we cannot use btr_check_node_ptr() */
-	ut_ad(parent_is_different
-	      || btr_check_node_ptr(index, merge_block, mtr));
-
-	if (btr_cur_get_block(&parent_cursor)->page.id().page_no()
-	    == index->page
-	    && !page_has_siblings(btr_cur_get_page(&parent_cursor))
-	    && page_get_n_recs(btr_cur_get_page(&parent_cursor)) == 1) {
-		btr_lift_page_up(index, merge_block, mtr);
-	}
+	return err;
 }
 
 #ifdef UNIV_BTR_PRINT
@@ -4552,7 +4657,7 @@ btr_validate_level(
 		}
 	}
 
-        dberr_t err;
+	dberr_t err;
 	block = btr_root_block_get(index, RW_SX_LATCH, &mtr, &err);
 	if (!block) {
 		mtr.commit();
@@ -5071,8 +5176,8 @@ error:
 
 	if (data_size > max_ins_size) {
 		/* We have to reorganize mpage */
-		if (!btr_page_reorganize_block(page_zip_level, mblock, index,
-					       mtr)) {
+		if (btr_page_reorganize_block(page_zip_level, mblock, index,
+					      mtr) != DB_SUCCESS) {
 			goto error;
 		}
 

@@ -212,7 +212,7 @@ close_and_exit:
 	ut_ad(row_get_rec_trx_id(rec, index, offsets));
 
 	if (mode == BTR_MODIFY_LEAF) {
-		success = btr_cur_optimistic_delete(
+		success = DB_FAIL != btr_cur_optimistic_delete(
 			btr_pcur_get_btr_cur(&node->pcur), 0, &mtr);
 	} else {
 		dberr_t	err;
@@ -503,8 +503,9 @@ row_purge_remove_sec_if_poss_leaf(
 					<< rec_index_print(
 						btr_cur_get_rec(btr_cur),
 						index);
-				ut_ad(0);
-				goto func_exit;
+				mtr.commit();
+				dict_set_corrupted(index, "purge");
+				goto cleanup;
 			}
 
 			if (index->is_spatial()) {
@@ -533,11 +534,8 @@ row_purge_remove_sec_if_poss_leaf(
 				}
 			}
 
-			if (!btr_cur_optimistic_delete(btr_cur, 0, &mtr)) {
-
-				/* The index entry could not be deleted. */
-				success = false;
-			}
+			success = btr_cur_optimistic_delete(btr_cur, 0, &mtr)
+				!= DB_FAIL;
 		}
 
 		/* (The index entry is still needed,
@@ -551,6 +549,7 @@ row_purge_remove_sec_if_poss_leaf(
 		/* The index entry does not exist, nothing to do. */
 func_exit:
 		mtr.commit();
+cleanup:
 		btr_pcur_close(&pcur); // FIXME: do we need these? when is btr_cur->rtr_info set?
 		return(success);
 	}

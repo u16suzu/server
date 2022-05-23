@@ -420,17 +420,14 @@ update_mbr:
 		/* If optimistic insert fail, try reorganize the page
 		and insert again. */
 		if (err != DB_SUCCESS && ins_suc) {
-			btr_page_reorganize(btr_cur_get_page_cur(cursor),
-					    index, mtr);
-
-			err = btr_cur_optimistic_insert(flags,
-							cursor,
-							&insert_offsets,
-							&heap,
-							node_ptr,
-							&insert_rec,
-							&dummy_big_rec,
-							0, NULL, mtr);
+			err = btr_page_reorganize(btr_cur_get_page_cur(cursor),
+						  index, mtr);
+			if (err == DB_SUCCESS) {
+				err = btr_cur_optimistic_insert(
+					flags, cursor, &insert_offsets, &heap,
+					node_ptr, &insert_rec, &dummy_big_rec,
+					0, NULL, mtr);
+			}
 
 			/* Will do pessimistic insert */
 			if (err != DB_SUCCESS) {
@@ -801,21 +798,18 @@ rtr_split_page_move_rec_list(
 
 		if (!page_zip_compress(new_block, index,
 				       page_zip_level, mtr)) {
-			ulint	ret_pos;
-
 			/* Before trying to reorganize the page,
 			store the number of preceding records on the page. */
-			ret_pos = page_rec_get_n_recs_before(ret);
+			ulint ret_pos = page_rec_get_n_recs_before(ret);
 			/* Before copying, "ret" was the predecessor
 			of the predefined supremum record.  If it was
 			the predefined infimum record, then it would
 			still be the infimum, and we would have
 			ret_pos == 0. */
 
-			if (UNIV_UNLIKELY
-			    (!page_zip_reorganize(new_block, index,
-						  page_zip_level, mtr))) {
-
+			switch (page_zip_reorganize(new_block, index,
+						    page_zip_level, mtr)) {
+			case DB_FAIL:
 				if (UNIV_UNLIKELY
 				    (!page_zip_decompress(new_page_zip,
 							  new_page, FALSE))) {
@@ -824,12 +818,12 @@ rtr_split_page_move_rec_list(
 #ifdef UNIV_GIS_DEBUG
 				ut_ad(page_validate(new_page, index));
 #endif
-
+				/* fall through */
+			default:
 				return(false);
+			case DB_SUCCESS:
+				ret = page_rec_get_nth(new_page, ret_pos);
 			}
-
-			/* The page was reorganized: Seek to ret_pos. */
-			ret = page_rec_get_nth(new_page, ret_pos);
 		}
 	}
 

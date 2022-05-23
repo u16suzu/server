@@ -2500,7 +2500,7 @@ static index_stats_t dict_stats_analyze_index(dict_index_t* index)
 
 	mtr.start();
 	mtr_s_lock_index(index, &mtr);
-        dberr_t err;
+	dberr_t err;
         buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH, &mtr, &err);
 	if (!root) {
 empty_index:

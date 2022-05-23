@@ -192,8 +192,9 @@ restart:
 			BTR_MODIFY_LEAF, &mtr) == btr_pcur_t::SAME_ALL);
 	}
 
-	if (btr_cur_optimistic_delete(&node->pcur.btr_cur, 0, &mtr)) {
-		err = DB_SUCCESS;
+	err = btr_cur_optimistic_delete(&node->pcur.btr_cur, 0, &mtr);
+
+	if (err != DB_FAIL) {
 		goto func_exit;
 	}
 
@@ -305,8 +306,7 @@ row_undo_ins_remove_sec_low(
 		btr_cur_t* btr_cur = btr_pcur_get_btr_cur(&pcur);
 
 		if (modify_leaf) {
-			err = btr_cur_optimistic_delete(btr_cur, 0, &mtr)
-				? DB_SUCCESS : DB_FAIL;
+			err = btr_cur_optimistic_delete(btr_cur, 0, &mtr);
 		} else {
 			/* Passing rollback=false here, because we are
 			deleting a secondary index record: the distinction

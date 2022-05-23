@@ -2690,7 +2690,7 @@ fseg_free_extent(
 	)
 {
 	buf_block_t* xdes;
-        dberr_t err;
+	dberr_t err;
 	xdes_t*	descr = xdes_get_descriptor(space, page, mtr, &err, &xdes);
 
 	if (!descr) {
@@ -2820,7 +2820,7 @@ fseg_free_step(
 		fil_block_check_type(*iblock, FIL_PAGE_INODE, mtr);
 	}
 
-        dberr_t err;
+	dberr_t err;
 	descr = fseg_get_first_extent(inode, space, mtr, &err);
 
 	if (descr) {
@@ -2904,16 +2904,16 @@ fseg_free_step_not_header(
 		fil_block_check_type(*iblock, FIL_PAGE_INODE, mtr);
 	}
 
-        dberr_t err;
+	dberr_t err;
 	if (xdes_t* descr = fseg_get_first_extent(inode, space, mtr, &err)) {
 		/* Free the extent held by the segment */
 		return fseg_free_extent(inode, iblock, space,
-                                        xdes_get_offset(descr),
-                                        mtr
+					xdes_get_offset(descr),
+					mtr
 #ifdef BTR_CUR_HASH_ADAPT
-                                        , ahi
+					, ahi
 #endif /* BTR_CUR_HASH_ADAPT */
-                                        ) != DB_SUCCESS;
+					) != DB_SUCCESS;
 	} else if (err != DB_SUCCESS) {
 		return true;
 	}

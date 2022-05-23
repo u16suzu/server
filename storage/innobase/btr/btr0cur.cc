@@ -3130,7 +3130,8 @@ btr_cur_insert_if_possible(
 	For compressed pages, page_cur_tuple_insert()
 	attempted this already. */
 	if (!rec && !page_cur_get_page_zip(page_cursor)
-	    && btr_page_reorganize(page_cursor, cursor->index, mtr)) {
+	    && btr_page_reorganize(page_cursor, cursor->index, mtr)
+	    == DB_SUCCESS) {
 		rec = page_cur_tuple_insert(
 			page_cursor, tuple, cursor->index,
 			offsets, heap, n_ext, mtr);
@@ -3455,7 +3456,8 @@ fail_err:
 		 << ' ' << rec_printer(entry).str());
 	DBUG_EXECUTE_IF("do_page_reorganize",
 			if (n_recs)
-			btr_page_reorganize(page_cursor, index, mtr););
+			ut_a(btr_page_reorganize(page_cursor, index, mtr)
+			     == DB_SUCCESS););
 
 	/* Now, try the insert */
 	{
@@ -3518,25 +3520,17 @@ fail_err:
 		goto fail;
 	} else {
 		ut_ad(!reorg);
+		reorg = true;
 
 		/* If the record did not fit, reorganize */
-		if (!btr_page_reorganize(page_cursor, index, mtr)) {
-			ut_ad(0);
-			goto fail;
-		}
-
-		ut_ad(page_get_max_insert_size(page, 1) == max_size);
-
-		reorg = TRUE;
-
-		*rec = page_cur_tuple_insert(page_cursor, entry, index,
-					     offsets, heap, n_ext, mtr);
-
-		if (UNIV_UNLIKELY(!*rec)) {
-			ib::fatal() <<  "Cannot insert tuple " << *entry
-				<< "into index " << index->name
-				<< " of table " << index->table->name
-				<< ". Max size: " << max_size;
+		err = btr_page_reorganize(page_cursor, index, mtr);
+		if (err != DB_SUCCESS
+		    || page_get_max_insert_size(page, 1) != max_size
+		    || !(*rec = page_cur_tuple_insert(page_cursor, entry, index,
+						      offsets, heap, n_ext,
+						      mtr))) {
+			err = DB_CORRUPTION;
+			goto fail_err;
 		}
 	}
 
@@ -3990,32 +3984,26 @@ btr_cur_update_alloc_zip_func(
 		return(false);
 	}
 
-	if (!btr_page_reorganize(cursor, index, mtr)) {
-		goto out_of_space;
+	if (btr_page_reorganize(cursor, index, mtr) == DB_SUCCESS) {
+		rec_offs_make_valid(page_cur_get_rec(cursor), index,
+				    page_is_leaf(page), offsets);
+
+		/* After recompressing a page, we must make sure that the free
+		bits in the insert buffer bitmap will not exceed the free
+		space on the page.  Because this function will not attempt
+		recompression unless page_zip_available() fails above, it is
+		safe to reset the free bits if page_zip_available() fails
+		again, below.  The free bits can safely be reset in a separate
+		mini-transaction.  If page_zip_available() succeeds below, we
+		can be sure that the btr_page_reorganize() above did not reduce
+		the free space available on the page. */
+
+		if (page_zip_available(page_zip, dict_index_is_clust(index),
+				       length, create)) {
+			return true;
+		}
 	}
 
-	rec_offs_make_valid(page_cur_get_rec(cursor), index,
-			    page_is_leaf(page), offsets);
-
-	/* After recompressing a page, we must make sure that the free
-	bits in the insert buffer bitmap will not exceed the free
-	space on the page.  Because this function will not attempt
-	recompression unless page_zip_available() fails above, it is
-	safe to reset the free bits if page_zip_available() fails
-	again, below.  The free bits can safely be reset in a separate
-	mini-transaction.  If page_zip_available() succeeds below, we
-	can be sure that the btr_page_reorganize() above did not reduce
-	the free space available on the page. */
-
-	if (page_zip_available(page_zip, dict_index_is_clust(index),
-			       length, create)) {
-		return(true);
-	}
-
-out_of_space:
-	ut_ad(rec_offs_validate(page_cur_get_rec(cursor), index, offsets));
-
-	/* Out of space: reset the free bits. */
 	if (!dict_index_is_clust(index)
 	    && !index->table->is_temporary()
 	    && page_is_leaf(page)) {
@@ -4618,7 +4606,6 @@ any_extern:
 			(!dict_table_is_comp(index->table)
 			 && new_rec_size >= REDUNDANT_REC_MAX_DATA_SIZE)) {
 		err = DB_OVERFLOW;
-
 		goto func_exit;
 	}
 
@@ -4709,17 +4696,22 @@ any_extern:
 		btr_cur_write_sys(new_entry, index, trx_id, roll_ptr);
 	}
 
-	/* There are no externally stored columns in new_entry */
-	rec = btr_cur_insert_if_possible(
-		cursor, new_entry, offsets, heap, 0/*n_ext*/, mtr);
-	ut_a(rec); /* <- We calculated above the insert would fit */
+	rec = btr_cur_insert_if_possible(cursor, new_entry, offsets, heap,
+					 0/*n_ext*/, mtr);
+	if (UNIV_UNLIKELY(!rec)) {
+		err = DB_CORRUPTION;
+		goto func_exit;
+	}
 
 	if (UNIV_UNLIKELY(update->is_metadata())) {
 		/* We must empty the PAGE_FREE list, because if this
 		was a rollback, the shortened metadata record
 		would have too many fields, and we would be unable to
 		know the size of the freed record. */
-		btr_page_reorganize(page_cursor, index, mtr);
+		err = btr_page_reorganize(page_cursor, index, mtr);
+		if (err != DB_SUCCESS) {
+			goto func_exit;
+		}
 	} else {
 		/* Restore the old explicit lock state on the record */
 		lock_rec_restore_from_page_infimum(*block, rec,
@@ -5075,7 +5067,10 @@ btr_cur_pessimistic_update(
 			was a rollback, the shortened metadata record
 			would have too many fields, and we would be unable to
 			know the size of the freed record. */
-			btr_page_reorganize(page_cursor, index, mtr);
+			err = btr_page_reorganize(page_cursor, index, mtr);
+			if (err != DB_SUCCESS) {
+				goto return_after_reservations;
+			}
 			rec = page_cursor->rec;
 			rec_offs_make_valid(rec, index, true, *offsets);
 			if (page_cursor->block->page.id().page_no()
@@ -5227,7 +5222,10 @@ btr_cur_pessimistic_update(
 		was a rollback, the shortened metadata record
 		would have too many fields, and we would be unable to
 		know the size of the freed record. */
-		btr_page_reorganize(page_cursor, index, mtr);
+		err = btr_page_reorganize(page_cursor, index, mtr);
+		if (err != DB_SUCCESS) {
+			goto return_after_reservations;
+		}
 		rec = page_cursor->rec;
 	} else {
 		lock_rec_restore_from_page_infimum(
@@ -5366,15 +5364,15 @@ that mtr holds an x-latch on the tree and on the cursor page. To avoid
 deadlocks, mtr must also own x-latches to brothers of page, if those
 brothers exist. NOTE: it is assumed that the caller has reserved enough
 free extents so that the compression will always succeed if done!
-@return TRUE if compression occurred */
-ibool
+@return whether compression occurred */
+bool
 btr_cur_compress_if_useful(
 /*=======================*/
 	btr_cur_t*	cursor,	/*!< in/out: cursor on the page to compress;
 				cursor does not stay valid if !adjust and
 				compression occurs */
-	ibool		adjust,	/*!< in: TRUE if should adjust the
-				cursor position even if compression occurs */
+	bool		adjust,	/*!< in: whether the cursor position should be
+				adjusted even when compression occurs */
 	mtr_t*		mtr)	/*!< in/out: mini-transaction */
 {
 	ut_ad(mtr->memo_contains_flagged(&cursor->index->lock,
@@ -5394,16 +5392,17 @@ btr_cur_compress_if_useful(
 		}
 	}
 
-	return(btr_cur_compress_recommendation(cursor, mtr)
-	       && btr_compress(cursor, adjust, mtr));
+	return btr_cur_compress_recommendation(cursor, mtr)
+		&& btr_compress(cursor, adjust, mtr) == DB_SUCCESS;
 }
 
 /*******************************************************//**
 Removes the record on which the tree cursor is positioned on a leaf page.
 It is assumed that the mtr has an x-latch on the page where the cursor is
 positioned, but no latch on the whole tree.
-@return TRUE if success, i.e., the page did not become too empty */
-ibool
+@return error code
+@retval DB_FAIL if the page would become too empty */
+dberr_t
 btr_cur_optimistic_delete(
 /*======================*/
 	btr_cur_t*	cursor,	/*!< in: cursor on leaf page, on the record to
@@ -5445,14 +5444,15 @@ btr_cur_optimistic_delete(
 				  cursor->index->n_core_fields,
 				  ULINT_UNDEFINED, &heap);
 
-	const ibool no_compress_needed = !rec_offs_any_extern(offsets)
-		&& btr_cur_can_delete_without_compress(
-			cursor, rec_offs_size(offsets), mtr);
-
-	if (!no_compress_needed) {
+	dberr_t err = DB_SUCCESS;
+	if (rec_offs_any_extern(offsets)
+	    || !btr_cur_can_delete_without_compress(cursor,
+						    rec_offs_size(offsets),
+						    mtr)) {
 		/* prefetch siblings of the leaf for the pessimistic
 		operation. */
 		btr_cur_prefetch_siblings(block, cursor->index);
+		err = DB_FAIL;
 		goto func_exit;
 	}
 
@@ -5517,8 +5517,8 @@ btr_cur_optimistic_delete(
 			after rollback, this deleted metadata record
 			would have too many fields, and we would be
 			unable to know the size of the freed record. */
-			btr_page_reorganize(btr_cur_get_page_cur(cursor),
-					    cursor->index, mtr);
+			err = btr_page_reorganize(btr_cur_get_page_cur(cursor),
+						  cursor->index, mtr);
 			goto func_exit;
 		} else {
 			if (!flags) {
@@ -5567,7 +5567,7 @@ func_exit:
 		mem_heap_free(heap);
 	}
 
-	return(no_compress_needed);
+	return err;
 }
 
 /*************************************************************//**
@@ -5727,10 +5727,10 @@ btr_cur_pessimistic_delete(
 			after rollback, this deleted metadata record
 			would carry too many fields, and we would be
 			unable to know the size of the freed record. */
-			btr_page_reorganize(btr_cur_get_page_cur(cursor),
-					    index, mtr);
+			*err = btr_page_reorganize(btr_cur_get_page_cur(cursor),
+						   index, mtr);
 			ut_ad(!ret);
-			goto return_after_reservations;
+			goto err_exit;
 		}
 	} else if (UNIV_UNLIKELY(page_rec_is_first(rec, page))) {
 		if (page_rec_is_last(rec, page)) {

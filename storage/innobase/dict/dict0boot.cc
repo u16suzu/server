@@ -232,7 +232,7 @@ dberr_t dict_boot()
 	/* Create the hash tables etc. */
 	dict_sys.create();
 
-        dberr_t err;
+	dberr_t err;
 	const buf_block_t *d = buf_page_get_gen(hdr_page_id, 0, RW_X_LATCH,
 						nullptr, BUF_GET, &mtr, &err);
         if (!d) {

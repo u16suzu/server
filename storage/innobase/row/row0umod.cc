@@ -338,8 +338,9 @@ row_undo_mod_clust(
 
 		if (index->table->is_temporary()) {
 			mtr.set_log_mode(MTR_LOG_NO_REDO);
-			if (btr_cur_optimistic_delete(&pcur->btr_cur, 0,
-						      &mtr)) {
+			err = btr_cur_optimistic_delete(&pcur->btr_cur, 0,
+							&mtr);
+			if (err != DB_FAIL) {
 				goto mtr_commit_exit;
 			}
 			btr_pcur_commit_specify_mtr(pcur, &mtr);
@@ -350,8 +351,9 @@ row_undo_mod_clust(
 			if (!row_undo_mod_must_purge(node, &mtr)) {
 				goto mtr_commit_exit;
 			}
-			if (btr_cur_optimistic_delete(&pcur->btr_cur, 0,
-						      &mtr)) {
+			err = btr_cur_optimistic_delete(&pcur->btr_cur, 0,
+							&mtr);
+			if (err != DB_FAIL) {
 				goto mtr_commit_exit;
 			}
 			purge_sys.latch.rd_unlock();
@@ -596,8 +598,7 @@ row_undo_mod_del_mark_or_remove_sec_low(
 		}
 
 		if (modify_leaf) {
-			err = btr_cur_optimistic_delete(btr_cur, 0, &mtr)
-				? DB_SUCCESS : DB_FAIL;
+			err = btr_cur_optimistic_delete(btr_cur, 0, &mtr);
 		} else {
 			/* Passing rollback=false,
 			because we are deleting a secondary index record:

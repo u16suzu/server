@@ -275,7 +275,7 @@ btr_create(
 	index_id_t		index_id,
 	dict_index_t*		index,
 	mtr_t*			mtr,
-        dberr_t*		err)
+	dberr_t*		err)
 	MY_ATTRIBUTE((nonnull(2,5,6), warn_unused_result));
 
 /** Free a persistent index tree if it exists.
@@ -364,15 +364,15 @@ be done either within the same mini-transaction, or by invoking
 ibuf_reset_free_bits() before mtr_commit(). On uncompressed pages,
 IBUF_BITMAP_FREE is unaffected by reorganization.
 
-@retval true if the operation was successful
-@retval false if it is a compressed page, and recompression failed */
-bool
+@return error code
+@retval DB_FAIL if reorganizing a ROW_FORMAT=COMPRESSED page failed */
+dberr_t
 btr_page_reorganize(
 /*================*/
 	page_cur_t*	cursor,	/*!< in/out: page cursor */
 	dict_index_t*	index,	/*!< in: the index tree of the page */
 	mtr_t*		mtr)	/*!< in/out: mini-transaction */
-	MY_ATTRIBUTE((nonnull));
+	MY_ATTRIBUTE((nonnull, warn_unused_result));
 /** Decide if the page should be split at the convergence point of inserts
 converging to the left.
 @param[in]	cursor	insert position
@@ -479,23 +479,24 @@ level lifts the records of the page to the father page, thus reducing the
 tree height. It is assumed that mtr holds an x-latch on the tree and on the
 page. If cursor is on the leaf level, mtr must also hold x-latches to
 the brothers, if they exist.
-@return TRUE on success */
-ibool
+@return error code
+@retval DB_FAIL if the tree could not be merged */
+dberr_t
 btr_compress(
 /*=========*/
 	btr_cur_t*	cursor,	/*!< in/out: cursor on the page to merge
 				or lift; the page must not be empty:
 				when deleting records, use btr_discard_page()
 				if the page would become empty */
-	ibool		adjust,	/*!< in: TRUE if should adjust the
-				cursor position even if compression occurs */
+	bool		adjust,	/*!< in: whether the cursor position should be
+				adjusted even when compression occurs */
 	mtr_t*		mtr)	/*!< in/out: mini-transaction */
-	MY_ATTRIBUTE((nonnull));
+	MY_ATTRIBUTE((nonnull, warn_unused_result));
 /*************************************************************//**
 Discards a page from a B-tree. This is used to remove the last record from
 a B-tree page: the whole page must be removed at the same time. This cannot
 be used for the root page, which is allowed to be empty. */
-void
+dberr_t
 btr_discard_page(
 /*=============*/
 	btr_cur_t*	cursor,	/*!< in: cursor on the page to discard: not on
@@ -578,15 +579,15 @@ be done either within the same mini-transaction, or by invoking
 ibuf_reset_free_bits() before mtr_commit(). On uncompressed pages,
 IBUF_BITMAP_FREE is unaffected by reorganization.
 
-@retval true if the operation was successful
-@retval false if it is a compressed page, and recompression failed */
-bool btr_page_reorganize_block(
+@return error code
+@retval DB_FAIL if reorganizing a ROW_FORMAT=COMPRESSED page failed */
+dberr_t btr_page_reorganize_block(
 	ulint		z_level,/*!< in: compression level to be used
 				if dealing with compressed page */
 	buf_block_t*	block,	/*!< in/out: B-tree page */
 	dict_index_t*	index,	/*!< in: the index tree of the page */
 	mtr_t*		mtr)	/*!< in/out: mini-transaction */
-	__attribute__((nonnull));
+	__attribute__((nonnull, warn_unused_result));
 
 #ifdef UNIV_BTR_PRINT
 /*************************************************************//**
@@ -648,7 +649,8 @@ btr_lift_page_up(
 				must not be empty: use
 				btr_discard_only_page_on_level if the last
 				record from the page should be removed */
-	mtr_t*		mtr)	/*!< in: mtr */
+	mtr_t*		mtr,	/*!< in/out: mini-transaction */
+	dberr_t*	err)	/*!< out: error code */
 	__attribute__((nonnull));
 
 #define BTR_N_LEAF_PAGES	1
