@@ -40,20 +40,8 @@ Created 11/29/1995 Heikki Tuuri
 #include "log0log.h"
 #include "dict0mem.h"
 #include "fsp0types.h"
-#include "log.h"
 
 typedef uint32_t page_no_t;
-
-static ATTRIBUTE_COLD void fsp_metadata_corrupted(const fil_space_t &space)
-{
-  if (space.is_stopping())
-    return;
-  // FIXME: set a flag to avoid repeated messages
-  sql_print_error("InnoDB: Allocation metadata for file '%s' is corrupted",
-                  space.chain.start->name);
-  DBUG_EXECUTE_IF("intermittent_read_failure", return;);
-  ut_ad("corruption" == 0);
-}
 
 /** Returns the first extent descriptor for a segment.
 We think of the extent lists of the segment catenated in the order
@@ -437,7 +425,7 @@ xdes_t *xdes_lst_get_descriptor(const fil_space_t &space, fil_addr_t lst_node,
   if (*block)
     return (*block)->page.frame + lst_node.boffset - XDES_FLST_NODE;
 
-  fsp_metadata_corrupted(space);
+  space.set_corrupted();
   return nullptr;
 }
 
@@ -938,16 +926,15 @@ static xdes_t *fsp_alloc_free_extent(fil_space_t *space, uint32_t hint,
 
 	buf_block_t* header = fsp_get_header(space, mtr, err);
 	if (!header) {
-		fsp_metadata_corrupted(*space);
+corrupted:
+		space->set_corrupted();
 		return nullptr;
 	}
 
 	descr = xdes_get_descriptor_with_space_hdr(
 		header, space, hint, mtr, err, &desc_block);
 	if (!descr) {
-corrupted:
-		fsp_metadata_corrupted(*space);
-		return nullptr;
+		goto corrupted;
 	}
 
 	if (desc_block != header && !space->full_crc32()) {
@@ -1108,7 +1095,7 @@ buf_block_t *fsp_alloc_free_page(fil_space_t *space, uint32_t hint,
   else if (*err != DB_SUCCESS)
   {
   err_exit:
-    fsp_metadata_corrupted(*space);
+    space->set_corrupted();
     return nullptr;
   }
   else
@@ -1213,7 +1200,7 @@ static dberr_t fsp_free_extent(fil_space_t* space, page_no_t offset,
 
   if (UNIV_UNLIKELY(xdes_get_state(descr) == XDES_FREE))
   {
-    fsp_metadata_corrupted(*space);
+    space->set_corrupted();
     return DB_CORRUPTION;
   }
 
@@ -1266,7 +1253,7 @@ static dberr_t fsp_free_page(fil_space_t *space, page_no_t offset, mtr_t *mtr)
 		}
 		/* fall through */
 	default:
-		fsp_metadata_corrupted(*space);
+		space->set_corrupted();
 		return DB_CORRUPTION;
 	}
 
@@ -1492,7 +1479,7 @@ static void fsp_free_seg_inode(fil_space_t *space, fseg_inode_t *inode,
     return;
   if (UNIV_UNLIKELY(memcmp(FSEG_MAGIC_N_BYTES, FSEG_MAGIC_N + inode, 4)))
   {
-    fsp_metadata_corrupted(*space);
+    space->set_corrupted();
     return;
   }
 
@@ -1854,7 +1841,7 @@ static dberr_t fseg_fill_free_list(const fseg_inode_t *inode,
 
   if (UNIV_UNLIKELY(memcmp(FSEG_MAGIC_N_BYTES, FSEG_MAGIC_N + inode, 4)))
   {
-    fsp_metadata_corrupted(*space);
+    space->set_corrupted();
     return DB_CORRUPTION;
   }
 
@@ -2530,7 +2517,7 @@ fseg_free_page_low(
 	}
 	if (UNIV_UNLIKELY(xdes_is_free(descr, offset & (extent_size - 1)))) {
 corrupted:
-		fsp_metadata_corrupted(*space);
+		space->set_corrupted();
 		return DB_CORRUPTION;
 	}
 

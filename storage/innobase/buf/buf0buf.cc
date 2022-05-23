@@ -3602,6 +3602,8 @@ database_corrupted:
 
       buf_page_print(read_frame, zip_size());
 
+      node.space->set_corrupted();
+
       ib::info() << " You can use CHECK TABLE to scan"
                     " your table for corruption. "
                  << FORCE_RECOVERY_MSG;

@@ -415,26 +415,29 @@ private:
   pthread_t latch_owner;
   ut_d(Atomic_relaxed<uint32_t> latch_count;)
 public:
-	/** MariaDB encryption data */
-	fil_space_crypt_t* crypt_data;
+  /** MariaDB encryption data */
+  fil_space_crypt_t* crypt_data;
 
-	/** Checks that this tablespace in a list of unflushed tablespaces. */
-	bool is_in_unflushed_spaces;
+  /** Whether needs_flush(), or this is in fil_system.unflushed_spaces */
+  bool is_in_unflushed_spaces;
 
-	/** Checks that this tablespace needs key rotation. */
-	bool is_in_default_encrypt;
+  /** Whether this in fil_system.default_encrypt_tables (needs key rotation) */
+  bool is_in_default_encrypt;
 
-	/** mutex to protect freed ranges */
-	std::mutex	freed_range_mutex;
+private:
+  /** Whether any corrupton of this tablespace has been reported */
+  mutable std::atomic_flag is_corrupted;
 
-	/** Variables to store freed ranges. This can be used to write
-	zeroes/punch the hole in files. Protected by freed_mutex */
-	range_set	freed_ranges;
+public:
+  /** mutex to protect freed_ranges and last_freed_lsn */
+  std::mutex freed_range_mutex;
 
-	/** Stores last page freed lsn. Protected by freed_mutex */
-	lsn_t		last_freed_lsn;
+  /** Variables to store freed ranges. This can be used to write
+  zeroes/punch the hole in files. Protected by freed_range_mutex */
+  range_set freed_ranges;
 
-	ulint		magic_n;/*!< FIL_SPACE_MAGIC_N */
+  /** Stores last page freed lsn. Protected by freed_mutex */
+  lsn_t last_freed_lsn;
 
   /** @return whether doublewrite buffering is needed */
   inline bool use_doublewrite() const;
@@ -494,6 +497,9 @@ public:
   Initially, purpose=FIL_TYPE_IMPORT so that no redo log is
   written while the space ID is being updated in each page. */
   inline void set_imported();
+
+  /** Report the tablespace as corrupted */
+  ATTRIBUTE_COLD void set_corrupted() const;
 
   /** @return whether the storage device is rotational (HDD, not SSD) */
   inline bool is_rotational() const;
@@ -1085,9 +1091,6 @@ private:
 };
 
 #ifndef UNIV_INNOCHECKSUM
-/** Value of fil_space_t::magic_n */
-#define	FIL_SPACE_MAGIC_N	89472
-
 /** File node of a tablespace or the log data space */
 struct fil_node_t final
 {

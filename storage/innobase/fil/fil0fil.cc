@@ -54,6 +54,12 @@ Created 10/25/1995 Heikki Tuuri
 # include <dirent.h>
 #endif
 
+ATTRIBUTE_COLD void fil_space_t::set_corrupted() const
+{
+  if (!is_stopping() && !is_corrupted.test_and_set())
+    sql_print_error("InnoDB: File '%s' is corrupted", chain.start->name);
+}
+
 /** Determine if the space id is a user tablespace id or not.
 @param space_id tablespace identifier
 @return true if it is a user tablespace ID */
@@ -236,8 +242,7 @@ fil_space_get_by_id(
 	mysql_mutex_assert_owner(&fil_system.mutex);
 
 	HASH_SEARCH(hash, &fil_system.spaces, id,
-		    fil_space_t*, space,
-		    ut_ad(space->magic_n == FIL_SPACE_MAGIC_N),
+		    fil_space_t*, space,,
 		    space->id == id);
 
 	return(space);
@@ -803,8 +808,6 @@ pfs_os_file_t fil_system_t::detach(fil_space_t *space, bool detach_handle)
   else if (space == temp_space)
     temp_space= nullptr;
 
-  ut_a(space->magic_n == FIL_SPACE_MAGIC_N);
-
   for (fil_node_t* node= UT_LIST_GET_FIRST(space->chain); node;
        node= UT_LIST_GET_NEXT(chain, node))
     if (node->is_open())
@@ -943,7 +946,6 @@ fil_space_t *fil_space_t::create(ulint id, ulint flags,
 	space->purpose = purpose;
 	space->flags = flags;
 
-	space->magic_n = FIL_SPACE_MAGIC_N;
 	space->crypt_data = crypt_data;
 	space->n_pending.store(CLOSING, std::memory_order_relaxed);
 
@@ -2860,6 +2862,7 @@ fail:
 #ifndef DBUG_OFF
 io_error:
 #endif
+				set_corrupted();
 				err = DB_IO_ERROR;
 				node = nullptr;
 				goto release;
