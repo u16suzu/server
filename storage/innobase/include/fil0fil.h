@@ -428,7 +428,6 @@ private:
   /** Whether any corrupton of this tablespace has been reported */
   mutable std::atomic_flag is_corrupted;
 
-public:
   /** mutex to protect freed_ranges and last_freed_lsn */
   std::mutex freed_range_mutex;
 
@@ -439,8 +438,17 @@ public:
   /** Stores last page freed lsn. Protected by freed_mutex */
   lsn_t last_freed_lsn;
 
+public:
   /** @return whether doublewrite buffering is needed */
   inline bool use_doublewrite() const;
+
+  /** @return whether a page has been freed */
+  inline bool is_freed(uint32_t page);
+
+  /** Apply freed_ranges to the file.
+  @param writable whether the file is writable
+  @return number of pages written or hole-punched */
+  uint32_t flush_freed(bool writable);
 
 	/** Append a file to the chain of files of a space.
 	@param[in]	name		file name of a file that is not open
