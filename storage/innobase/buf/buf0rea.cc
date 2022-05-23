@@ -322,7 +322,7 @@ nothing_read:
 	*err = fio.err;
 
 	if (UNIV_UNLIKELY(fio.err != DB_SUCCESS)) {
-		buf_pool.corrupted_evict(bpage);
+		buf_pool.corrupted_evict(bpage, buf_page_t::READ_FIX);
 	} else if (sync) {
 		thd_wait_end(NULL);
 		/* The i/o was already completed in space->io() */

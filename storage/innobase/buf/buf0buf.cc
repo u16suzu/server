@@ -66,6 +66,7 @@ Created 11/5/1995 Heikki Tuuri
 #include "buf0dump.h"
 #include <map>
 #include <sstream>
+#include "log.h"
 
 using st_::span;
 
@@ -2888,8 +2889,14 @@ re_evict:
 		if (state >= buf_page_t::IBUF_EXIST
 		    && state < buf_page_t::REINIT) {
 			block->page.clear_ibuf_exist();
-			ibuf_merge_or_delete_for_page(block, page_id,
-						      block->zip_size());
+			if (dberr_t e =
+			    ibuf_merge_or_delete_for_page(block, page_id,
+							  block->zip_size())) {
+				if (err) {
+					*err = e;
+				}
+				buf_pool.corrupted_evict(&block->page, state);
+			}
 		}
 
 		if (rw_latch == RW_X_LATCH) {
@@ -2967,7 +2974,14 @@ buf_page_get_gen(
       {
         if (block->page.is_ibuf_exist())
           block->page.clear_ibuf_exist();
-        ibuf_merge_or_delete_for_page(block, page_id, block->zip_size());
+        if (dberr_t e=
+            ibuf_merge_or_delete_for_page(block, page_id, block->zip_size()))
+        {
+          if (err)
+            *err= e;
+          buf_pool.corrupted_evict(&block->page, s);
+          return nullptr;
+        }
       }
 
       if (rw_latch == RW_X_LATCH)
@@ -3579,17 +3593,6 @@ dberr_t buf_page_t::read_complete(const fil_node_t &node)
   if (UNIV_UNLIKELY(err != DB_SUCCESS))
   {
 database_corrupted:
-    /* Not a real corruption if it was triggered by error injection */
-    DBUG_EXECUTE_IF("buf_page_import_corrupt_failure",
-                    if (!is_predefined_tablespace(id().space()))
-                    {
-                      buf_pool.corrupted_evict(this);
-                      ib::info() << "Simulated IMPORT corruption";
-                      return err;
-                    }
-                    err= DB_SUCCESS;
-                    goto page_not_corrupt;);
-
     if (belongs_to_unzip_LRU())
       memset_aligned<UNIV_PAGE_SIZE_MIN>(frame, 0, srv_page_size);
 
@@ -3610,19 +3613,13 @@ database_corrupted:
     }
 
     if (!srv_force_recovery)
-    {
-      buf_pool.corrupted_evict(this);
-      return err;
-    }
+      goto release_page;
   }
-
-  DBUG_EXECUTE_IF("buf_page_import_corrupt_failure",
-                  page_not_corrupt: err= err; );
 
   if (err == DB_PAGE_CORRUPTED || err == DB_DECRYPTION_FAILED)
   {
 release_page:
-    buf_pool.corrupted_evict(this);
+    buf_pool.corrupted_evict(this, buf_page_t::READ_FIX);
     return err;
   }
 

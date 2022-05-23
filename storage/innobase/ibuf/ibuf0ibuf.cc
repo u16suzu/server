@@ -4207,24 +4207,15 @@ exist entries for such a page if the page belonged to an index which
 subsequently was dropped.
 @param block    X-latched page to try to apply changes to, or NULL to discard
 @param page_id  page identifier
-@param zip_size ROW_FORMAT=COMPRESSED page size, or 0 */
-void ibuf_merge_or_delete_for_page(buf_block_t *block, const page_id_t page_id,
-                                   ulint zip_size)
+@param zip_size ROW_FORMAT=COMPRESSED page size, or 0
+@return error code */
+dberr_t ibuf_merge_or_delete_for_page(buf_block_t *block,
+                                      const page_id_t page_id,
+                                      ulint zip_size)
 {
 	if (trx_sys_hdr_page(page_id)) {
-		return;
+		return DB_SUCCESS;
 	}
-
-	btr_pcur_t	pcur;
-#ifdef UNIV_IBUF_DEBUG
-	ulint		volume			= 0;
-#endif /* UNIV_IBUF_DEBUG */
-	bool		corruption_noticed	= false;
-	mtr_t		mtr;
-
-	/* Counts for merged & discarded operations. */
-	ulint		mops[IBUF_OP_COUNT];
-	ulint		dops[IBUF_OP_COUNT];
 
 	ut_ad(!block || page_id == block->page.id());
 	ut_ad(!block || block->page.frame);
@@ -4237,13 +4228,20 @@ void ibuf_merge_or_delete_for_page(buf_block_t *block, const page_id_t page_id,
 
 	if (ibuf_fixed_addr_page(page_id, physical_size)
 	    || fsp_descr_page(page_id, physical_size)) {
-		return;
+		return DB_SUCCESS;
 	}
+
+	btr_pcur_t	pcur;
+#ifdef UNIV_IBUF_DEBUG
+	ulint		volume			= 0;
+#endif /* UNIV_IBUF_DEBUG */
+	dberr_t		err = DB_SUCCESS;
+	mtr_t		mtr;
 
 	fil_space_t* space = fil_space_t::get(page_id.space());
 
 	if (UNIV_UNLIKELY(!space)) {
-		block = NULL;
+		block = nullptr;
 	} else {
 		ulint	bitmap_bits = 0;
 
@@ -4275,8 +4273,23 @@ void ibuf_merge_or_delete_for_page(buf_block_t *block, const page_id_t page_id,
 		if (!bitmap_bits) {
 			/* No changes are buffered for this page. */
 			space->release();
-			return;
+			return DB_SUCCESS;
 		}
+	}
+
+	if (!block) {
+	} else if (!fil_page_index_page_check(block->page.frame)
+		   || !page_is_leaf(block->page.frame)) {
+		space->set_corrupted();
+		err = DB_CORRUPTION;
+		block = nullptr;
+	} else {
+		/* Move the ownership of the x-latch on the page to this OS
+		thread, so that we can acquire a second x-latch on it. This
+		is needed for the insert operations to the index page to pass
+		the debug checks. */
+
+		block->page.lock.claim_ownership();
 	}
 
 	mem_heap_t* heap = mem_heap_create(512);
@@ -4284,31 +4297,9 @@ void ibuf_merge_or_delete_for_page(buf_block_t *block, const page_id_t page_id,
 	const dtuple_t* search_tuple = ibuf_search_tuple_build(
 		page_id.space(), page_id.page_no(), heap);
 
-	if (block != NULL) {
-		/* Move the ownership of the x-latch on the page to this OS
-		thread, so that we can acquire a second x-latch on it. This
-		is needed for the insert operations to the index page to pass
-		the debug checks. */
-
-		block->page.lock.claim_ownership();
-
-		if (!fil_page_index_page_check(block->page.frame)
-		    || !page_is_leaf(block->page.frame)) {
-
-			corruption_noticed = true;
-
-			ib::error() << "Corruption in the tablespace. Bitmap"
-				" shows insert buffer records to page "
-				<< page_id << " though the page type is "
-				<< fil_page_get_type(block->page.frame)
-				<< ", which is not an index leaf page. We try"
-				" to resolve the problem by skipping the"
-				" insert buffer merge for this page. Please"
-				" run CHECK TABLE on your tables to determine"
-				" if they are corrupt after this.";
-			ut_ad(0);
-		}
-	}
+	/* Counts for merged & discarded operations. */
+	ulint mops[IBUF_OP_COUNT];
+	ulint dops[IBUF_OP_COUNT];
 
 	memset(mops, 0, sizeof(mops));
 	memset(dops, 0, sizeof(dops));
@@ -4318,9 +4309,12 @@ loop:
 
 	/* Position pcur in the insert buffer at the first entry for this
 	index page */
-	ut_a(btr_pcur_open_on_user_rec(ibuf.index, search_tuple, PAGE_CUR_GE,
-				       BTR_MODIFY_LEAF, &pcur, &mtr)
-	     == DB_SUCCESS);
+	if (btr_pcur_open_on_user_rec(ibuf.index, search_tuple, PAGE_CUR_GE,
+				      BTR_MODIFY_LEAF, &pcur, &mtr)
+	    != DB_SUCCESS) {
+		err = DB_CORRUPTION;
+		goto reset_bit;
+	}
 
 	if (block) {
 		block->page.fix();
@@ -4355,7 +4349,7 @@ loop:
 			goto reset_bit;
 		}
 
-		if (corruption_noticed) {
+		if (err) {
 			fputs("InnoDB: Discarding record\n ", stderr);
 			rec_print_old(stderr, rec);
 			fputs("\nInnoDB: from the insert buffer!\n\n", stderr);
@@ -4490,6 +4484,8 @@ reset_bit:
 	ibuf.n_merges++;
 	ibuf_add_ops(ibuf.n_merged_ops, mops);
 	ibuf_add_ops(ibuf.n_discarded_ops, dops);
+
+	return err;
 }
 
 /** Delete all change buffer entries for a tablespace,
