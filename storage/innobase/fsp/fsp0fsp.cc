@@ -2803,8 +2803,6 @@ fseg_free_step(
 	ulint		n;
 	fseg_inode_t*	inode;
 
-	DBUG_ENTER("fseg_free_step");
-
 	const uint32_t space_id = page_get_space_id(page_align(header));
 	const uint32_t header_page = page_get_page_no(page_align(header));
 
@@ -2812,7 +2810,7 @@ fseg_free_step(
 	xdes_t* descr = xdes_get_descriptor(space, header_page, mtr);
 
 	if (!descr) {
-		DBUG_RETURN(true);
+		return true;
 	}
 
 	/* Check that the header resides on a page which has not been
@@ -2822,13 +2820,13 @@ fseg_free_step(
 				       header_page & (FSP_EXTENT_SIZE - 1)))) {
 		/* Some corruption was detected: stop the freeing
 		in order to prevent a crash. */
-		DBUG_RETURN(true);
+		return true;
 	}
 	buf_block_t* iblock;
 	const ulint zip_size = space->zip_size();
 	inode = fseg_inode_try_get(header, space_id, zip_size, mtr, &iblock);
 	if (!inode || space->is_stopping()) {
-		DBUG_RETURN(true);
+		return true;
 	}
 
 	if (!space->full_crc32()) {
@@ -2840,17 +2838,16 @@ fseg_free_step(
 
 	if (descr) {
 		/* Free the extent held by the segment */
-		DBUG_RETURN(fseg_free_extent(inode, iblock, space,
-					     xdes_get_offset(descr),
-					     mtr
+		return fseg_free_extent(inode, iblock, space,
+					xdes_get_offset(descr), mtr
 #ifdef BTR_CUR_HASH_ADAPT
-					     , ahi
+					, ahi
 #endif /* BTR_CUR_HASH_ADAPT */
-					     ) != DB_SUCCESS);
+					) != DB_SUCCESS;
 	}
 
 	if (err != DB_SUCCESS || space->is_stopping()) {
-		DBUG_RETURN(true);
+		return true;
 	}
 
 	/* Free a frag page */
@@ -2859,8 +2856,7 @@ fseg_free_step(
 	if (n == ULINT_UNDEFINED) {
 		/* Freeing completed: free the segment inode */
 		fsp_free_seg_inode(space, inode, iblock, mtr);
-
-		DBUG_RETURN(true);
+		return true;
 	}
 
 	page_no_t page_no = fseg_get_nth_frag_page_no(inode, n);
@@ -2870,7 +2866,7 @@ fseg_free_step(
 			       , ahi
 #endif /* BTR_CUR_HASH_ADAPT */
 			       ) != DB_SUCCESS) {
-		DBUG_RETURN(true);
+		return true;
 	}
 
 	buf_page_free(space, page_no, mtr);
@@ -2881,10 +2877,10 @@ fseg_free_step(
 		/* Freeing completed: free the segment inode */
 		fsp_free_seg_inode(space, inode, iblock, mtr);
 
-		DBUG_RETURN(true);
+		return true;
 	}
 
-	DBUG_RETURN(false);
+	return false;
 }
 
 bool
