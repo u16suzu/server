@@ -421,7 +421,11 @@ static dberr_t trx_purge_free_segment(trx_rseg_t *rseg, fil_addr_t hdr_addr)
     if (UNIV_UNLIKELY(err != DB_SUCCESS))
       goto func_exit;
     byte *hist= TRX_RSEG + TRX_RSEG_HISTORY_SIZE + rseg_hdr->page.frame;
-    ut_ad(mach_read_from_4(hist) >= seg_size);
+    if (UNIV_UNLIKELY(mach_read_from_4(hist) < seg_size))
+    {
+      err= DB_CORRUPTION;
+      goto func_exit;
+    }
     mtr.write<4>(*rseg_hdr, hist, mach_read_from_4(hist) - seg_size);
 
     /* Here we assume that a file segment with just the header page

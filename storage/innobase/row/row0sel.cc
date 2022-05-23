@@ -1021,9 +1021,10 @@ row_sel_get_clust_rec(
 	    || btr_pcur_get_low_match(&(plan->clust_pcur))
 	    < dict_index_get_n_unique(index)) {
 
-		ut_a(rec_get_deleted_flag(rec,
-					  dict_table_is_comp(plan->table)));
-		ut_a(node->read_view);
+		if (!node->read_view ||
+		    !rec_get_deleted_flag(rec, plan->table->not_redundant())) {
+			err = DB_CORRUPTION;
+		}
 
 		/* In a rare case it is possible that no clust rec is found
 		for a delete-marked secondary index record: if in row0umod.cc
@@ -3438,7 +3439,7 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 #endif /* UNIV_DEBUG */
 		} else if (!rec_get_deleted_flag(rec,
 					  dict_table_is_comp(sec_index->table))
-		    || prebuilt->select_lock_type != LOCK_NONE) {
+			   || prebuilt->select_lock_type != LOCK_NONE) {
 			/* In a rare case it is possible that no clust
 			rec is found for a delete-marked secondary index
 			record: if in row0umod.cc in
@@ -3457,17 +3458,13 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 			fputs("\n"
 			      "InnoDB: clust index record ", stderr);
 			rec_print(stderr, clust_rec, clust_index);
-			putc('\n', stderr);
-			trx_print(stderr, trx, 600);
-			fputs("\n"
-			      "InnoDB: Submit a detailed bug report"
-			      " to https://jira.mariadb.org/\n", stderr);
-			ut_ad(0);
+			err = DB_CORRUPTION;
+			clust_rec = NULL;
+			goto func_exit;
 		}
 
-		clust_rec = NULL;
-
 		err = DB_SUCCESS;
+		clust_rec = NULL;
 		goto func_exit;
 	}
 
