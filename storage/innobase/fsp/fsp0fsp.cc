@@ -1550,10 +1550,6 @@ fseg_inode_try_get(
     return nullptr;
   }
 
-  buf_block_t* b;
-  if (!block)
-    block= &b;
-
   *block=
     buf_page_get_gen(page_id_t(space,
                                mach_read_from_4(header + FSEG_HDR_PAGE_NO)),
