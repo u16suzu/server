@@ -343,6 +343,7 @@ row_undo_mod_clust(
 			if (err != DB_FAIL) {
 				goto mtr_commit_exit;
 			}
+			err = DB_SUCCESS;
 			btr_pcur_commit_specify_mtr(pcur, &mtr);
 		} else {
 			index->set_modified(mtr);
@@ -356,6 +357,7 @@ row_undo_mod_clust(
 			if (err != DB_FAIL) {
 				goto mtr_commit_exit;
 			}
+			err = DB_SUCCESS;
 			purge_sys.latch.rd_unlock();
 			btr_pcur_commit_specify_mtr(pcur, &mtr);
 			have_latch = false;
