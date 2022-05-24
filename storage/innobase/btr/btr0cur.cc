@@ -289,8 +289,14 @@ latch_block:
 			latch_leaves->savepoints[1] = mtr->get_savepoint();
 			latch_leaves->blocks[1] = block;
 		}
+
+		mtr->memo_push(block, MTR_MEMO_PAGE_X_FIX);
+
 		block->page.fix();
-		mtr->page_lock(block, RW_X_LATCH);
+		block->page.lock.x_lock();
+#ifdef BTR_CUR_HASH_ADAPT
+		ut_ad(!block->index || !block->index->freed());
+#endif
 
 		if (UNIV_LIKELY_NULL(rtr_info)) {
 			rtr_info->tree_savepoints[RTR_MAX_LEVELS + 1] = save;
@@ -6938,9 +6944,13 @@ btr_store_big_rec_extern_fields(
 			mtr.start();
 			index->set_modified(mtr);
 			mtr.set_log_mode(btr_mtr->get_log_mode());
+			mtr.memo_push(rec_block, MTR_MEMO_PAGE_X_FIX);
 
 			rec_block->page.fix();
-			mtr.page_lock(rec_block, RW_X_LATCH);
+			rec_block->page.lock.x_lock();
+#ifdef BTR_CUR_HASH_ADAPT
+			ut_ad(!rec_block->index || !rec_block->index->freed());
+#endif
 
 			uint32_t hint_prev = prev_page_no;
 			if (hint_prev == FIL_NULL) {
@@ -7308,8 +7318,13 @@ btr_free_externally_stored_field(
 		/* The buffer pool block containing the BLOB pointer is
 		exclusively latched by local_mtr. To satisfy some design
 		constraints, we must recursively latch it in mtr as well. */
+		mtr.memo_push(block, MTR_MEMO_PAGE_X_FIX);
 		block->fix();
-		mtr.page_lock(block, RW_X_LATCH);
+		block->page.lock.x_lock();
+#ifdef BTR_CUR_HASH_ADAPT
+		ut_ad(!block->index || !block->index->freed());
+#endif
+
 		const page_t* page = buf_block_get_frame(ext_block);
 
 		if (ext_zip_size) {

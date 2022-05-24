@@ -852,10 +852,13 @@ void PageBulk::latch()
 {
   m_mtr.start();
   m_index->set_modified(m_mtr);
-
-  m_mtr.page_lock(m_block, RW_X_LATCH);
-
+#ifdef BTR_CUR_HASH_ADAPT
+  ut_ad(!m_block->index);
+#endif
+  m_block->page.lock.x_lock();
   ut_ad(m_block->page.buf_fix_count());
+  m_mtr.memo_push(m_block, MTR_MEMO_PAGE_X_FIX);
+
   ut_ad(m_cur_rec > m_page);
   ut_ad(m_cur_rec < m_heap_top);
 }

@@ -2954,8 +2954,9 @@ write_completed:
         mysql_mutex_unlock(&recv_sys.mutex);
       }
 
-      ib::error() << "Failed to read page " << id.page_no()
-                  << " from file '" << request.node->name << "': " << err;
+      if (err != DB_FAIL)
+        ib::error() << "Failed to read page " << id.page_no()
+                    << " from file '" << request.node->name << "': " << err;
     }
   }
 

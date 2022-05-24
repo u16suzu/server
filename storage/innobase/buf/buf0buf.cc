@@ -2851,63 +2851,130 @@ re_evict:
 	if (UNIV_UNLIKELY(state < buf_page_t::UNFIXED)) {
 		goto ignore_block;
 	}
-	ut_ad(state < buf_page_t::UNFIXED || (~buf_page_t::LRU_MASK) & state);
+	ut_ad((~buf_page_t::LRU_MASK) & state);
 	ut_ad(state > buf_page_t::WRITE_FIX || state < buf_page_t::READ_FIX);
-
-	/* While tablespace is reinited the indexes are already freed but the
-	blocks related to it still resides in buffer pool. Trying to remove
-	such blocks from buffer pool would invoke removal of AHI entries
-	associated with these blocks. Logic to remove AHI entry will try to
-	load the block but block is already in free state. Handle the said case
-	with mode = BUF_PEEK_IF_IN_POOL that is invoked from
-	"btr_search_drop_page_hash_when_freed". */
-
-	if (mode != BUF_GET_POSSIBLY_FREED || mode != BUF_PEEK_IF_IN_POOL) {
-		const bool not_first_access = block->page.set_accessed();
-		buf_page_make_young_if_needed(&block->page);
-		if (!not_first_access) {
-			buf_read_ahead_linear(page_id, block->zip_size(),
-					      ibuf_inside(mtr));
-		}
-	}
 
 #ifdef UNIV_DEBUG
 	if (!(++buf_dbg_counter % 5771)) buf_pool.validate();
 #endif /* UNIV_DEBUG */
 	ut_ad(block->page.frame);
 
-	ut_ad(block->page.id() == page_id);
-
 	if (state >= buf_page_t::UNFIXED
 	    && allow_ibuf_merge
 	    && fil_page_get_type(block->page.frame) == FIL_PAGE_INDEX
 	    && page_is_leaf(block->page.frame)) {
 		block->page.lock.x_lock();
+		ut_ad(block->page.id() == page_id
+		      || (state >= buf_page_t::READ_FIX
+			  && state < buf_page_t::WRITE_FIX));
+
+#ifdef BTR_CUR_HASH_ADAPT
+		if (dict_index_t* index = block->index) {
+			if (index->freed()) {
+				btr_search_drop_page_hash_index(block);
+			}
+		}
+#endif /* BTR_CUR_HASH_ADAPT */
+
+		dberr_t e;
+
+		if (UNIV_UNLIKELY(block->page.id() != page_id)) {
+page_id_mismatch:
+			state = block->page.state();
+			e = DB_CORRUPTION;
+ibuf_merge_corrupted:
+			if (err) {
+				*err = e;
+			}
+			buf_pool.corrupted_evict(&block->page, state);
+		}
+
 		state = block->page.state();
 		ut_ad(state < buf_page_t::READ_FIX);
 
 		if (state >= buf_page_t::IBUF_EXIST
 		    && state < buf_page_t::REINIT) {
 			block->page.clear_ibuf_exist();
-			if (dberr_t e =
-			    ibuf_merge_or_delete_for_page(block, page_id,
-							  block->zip_size())) {
-				if (err) {
-					*err = e;
-				}
-				buf_pool.corrupted_evict(&block->page, state);
+			e = ibuf_merge_or_delete_for_page(block, page_id,
+							  block->zip_size());
+			if (UNIV_UNLIKELY(e != DB_SUCCESS)) {
+				goto ibuf_merge_corrupted;
 			}
 		}
 
 		if (rw_latch == RW_X_LATCH) {
 			mtr->memo_push(block, MTR_MEMO_PAGE_X_FIX);
+			goto got_latch;
 		} else {
 			block->page.lock.x_unlock();
 			goto get_latch;
 		}
 	} else {
 get_latch:
-		mtr->page_lock(block, rw_latch);
+		switch (rw_latch) {
+			mtr_memo_type_t fix_type;
+		case RW_NO_LATCH:
+			mtr->memo_push(block, MTR_MEMO_BUF_FIX);
+			return block;
+		case RW_S_LATCH:
+			fix_type = MTR_MEMO_PAGE_S_FIX;
+			block->page.lock.s_lock();
+			ut_ad(!block->page.is_read_fixed());
+			if (UNIV_UNLIKELY(block->page.id() != page_id)) {
+				block->page.lock.s_unlock();
+				block->page.lock.x_lock();
+				goto page_id_mismatch;
+			}
+get_latch_valid:
+#ifdef BTR_CUR_HASH_ADAPT
+			if (dict_index_t* index = block->index) {
+				if (index->freed()) {
+					mtr_t::defer_drop_ahi(block, fix_type);
+				}
+			}
+#endif /* BTR_CUR_HASH_ADAPT */
+			mtr->memo_push(block, fix_type);
+			break;
+		case RW_SX_LATCH:
+			fix_type = MTR_MEMO_PAGE_SX_FIX;
+			block->page.lock.u_lock();
+			ut_ad(!block->page.is_io_fixed());
+			if (UNIV_UNLIKELY(block->page.id() != page_id)) {
+				block->page.lock.u_x_upgrade();
+				goto page_id_mismatch;
+			}
+			goto get_latch_valid;
+		default:
+			ut_ad(rw_latch == RW_X_LATCH);
+			fix_type = MTR_MEMO_PAGE_X_FIX;
+			if (block->page.lock.x_lock_upgraded()) {
+				ut_ad(block->page.id() == page_id);
+				block->unfix();
+				mtr->page_lock_upgrade(*block);
+				return block;
+			}
+			if (UNIV_UNLIKELY(block->page.id() != page_id)) {
+				goto page_id_mismatch;
+			}
+			goto get_latch_valid;
+		}
+
+got_latch:
+		ut_ad(page_id_t(page_get_space_id(block->page.frame),
+				page_get_page_no(block->page.frame))
+		      == page_id);
+
+		if (mode == BUF_GET_POSSIBLY_FREED
+		    || mode == BUF_PEEK_IF_IN_POOL) {
+			return block;
+		}
+
+		const bool not_first_access{block->page.set_accessed()};
+		buf_page_make_young_if_needed(&block->page);
+		if (!not_first_access) {
+			buf_read_ahead_linear(page_id, block->zip_size(),
+					      ibuf_inside(mtr));
+		}
 	}
 
 	return block;
@@ -3116,7 +3183,7 @@ buf_block_t *buf_page_try_get(const page_id_t page_id, mtr_t *mtr)
 
   block->page.fix();
   ut_ad(!block->page.is_read_fixed());
-  mtr_memo_push(mtr, block, MTR_MEMO_PAGE_S_FIX);
+  mtr->memo_push(block, MTR_MEMO_PAGE_S_FIX);
 
 #ifdef UNIV_DEBUG
   if (!(++buf_dbg_counter % 5771)) buf_pool.validate();
@@ -3188,7 +3255,7 @@ static buf_block_t *buf_page_create_low(page_id_t page_id, ulint zip_size,
       {
         mysql_mutex_unlock(&buf_pool.mutex);
         buf_block_t *block= reinterpret_cast<buf_block_t*>(bpage);
-        mtr_memo_push(mtr, block, MTR_MEMO_PAGE_X_FIX);
+        mtr->memo_push(block, MTR_MEMO_PAGE_X_FIX);
 #ifdef BTR_CUR_HASH_ADAPT
         drop_hash_entry= block->index;
 #endif
@@ -3228,7 +3295,7 @@ static buf_block_t *buf_page_create_low(page_id_t page_id, ulint zip_size,
         bpage->lock.free();
 #endif
         ut_free(bpage);
-        mtr_memo_push(mtr, free_block, MTR_MEMO_PAGE_X_FIX);
+        mtr->memo_push(free_block, MTR_MEMO_PAGE_X_FIX);
         bpage= &free_block->page;
       }
     }
@@ -3569,7 +3636,11 @@ dberr_t buf_page_t::read_complete(const fil_node_t &node)
 
     if (read_id == expected_id);
     else if (read_id == page_id_t(0, 0))
-      /* This is likely an uninitialized page. */;
+    {
+      /* This is likely an uninitialized page. */
+      err= DB_FAIL;
+      goto release_page;
+    }
     else if (!node.space->full_crc32() &&
              page_id_t(0, read_id.page_no()) == expected_id)
       /* FIL_PAGE_SPACE_ID was written as garbage in the system tablespace
@@ -3585,8 +3656,12 @@ dberr_t buf_page_t::read_complete(const fil_node_t &node)
       goto release_page;
     }
     else
+    {
       ib::error() << "Space id and page no stored in the page, read in are "
                   << read_id << ", should be " << expected_id;
+      err= DB_PAGE_CORRUPTED;
+      goto release_page;
+    }
   }
 
   err= buf_page_check_corrupt(this, node);

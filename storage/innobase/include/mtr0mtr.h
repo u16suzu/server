@@ -24,8 +24,7 @@ Mini-transaction buffer
 Created 11/26/1995 Heikki Tuuri
 *******************************************************/
 
-#ifndef mtr0mtr_h
-#define mtr0mtr_h
+#pragma once
 
 #include "fil0fil.h"
 #include "dyn0buf.h"
@@ -53,16 +52,6 @@ savepoint. */
 @return true if released */
 #define mtr_memo_release(m, o, t)					\
 				(m)->memo_release((o), (t))
-
-/** Print info of an mtr handle. */
-#define mtr_print(m)		(m)->print()
-
-/** Return the log object of a mini-transaction buffer.
-@return	log */
-#define mtr_get_log(m)		(m)->get_log()
-
-/** Push an object to an mtr memo stack. */
-#define mtr_memo_push(m, o, t)	(m)->memo_push(o, t)
 
 #ifdef UNIV_PFS_RWLOCK
 # define mtr_s_lock_index(i,m)	(m)->s_lock(__FILE__, __LINE__, &(i)->lock)
@@ -360,9 +349,6 @@ public:
 		const byte*	ptr,
 		ulint		flags) const;
 
-	/** Print info of an mtr handle. */
-	void print() const;
-
 	/** @return true if mini-transaction contains modifications. */
 	bool has_modifications() const { return m_modifications; }
 
@@ -606,6 +592,12 @@ public:
     PAGE_FLUSH_SYNC
   };
 
+#ifdef BTR_CUR_HASH_ADAPT
+  /** If a stale adaptive hash index exists on the block, drop it. */
+  ATTRIBUTE_COLD
+  static void defer_drop_ahi(buf_block_t *block, mtr_memo_type_t fix_type);
+#endif
+
 private:
   /** Log a write of a byte string to a page.
   @param block   buffer page
@@ -710,5 +702,3 @@ private:
 };
 
 #include "mtr0mtr.inl"
-
-#endif /* mtr0mtr_h */
