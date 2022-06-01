@@ -85,7 +85,7 @@ private:
 public:
 	io_slots(int max_submitted_io, int max_callback_concurrency) :
 		m_cache(max_submitted_io),
-		m_group(max_callback_concurrency),
+		m_group(false, max_callback_concurrency),
 		m_max_aio(max_submitted_io)
 	{
 	}
