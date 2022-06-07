@@ -116,36 +116,6 @@ struct srv_stats_t
 	/** Number of data read in total (in bytes) */
 	ulint_ctr_1_t		data_read;
 
-	/** Number of rows read. */
-	ulint_ctr_n_t		n_rows_read;
-
-	/** Number of rows updated */
-	ulint_ctr_n_t		n_rows_updated;
-
-	/** Number of rows deleted */
-	ulint_ctr_n_t		n_rows_deleted;
-
-	/** Number of rows inserted */
-	ulint_ctr_n_t		n_rows_inserted;
-
-	/** Number of system rows read. */
-	ulint_ctr_n_t		n_system_rows_read;
-
-	/** Number of system rows updated */
-	ulint_ctr_n_t		n_system_rows_updated;
-
-	/** Number of system rows deleted */
-	ulint_ctr_n_t		n_system_rows_deleted;
-
-	/** Number of system rows inserted */
-	ulint_ctr_n_t		n_system_rows_inserted;
-
-	/** Number of times secondary index lookup triggered cluster lookup */
-	ulint_ctr_n_t		n_sec_rec_cluster_reads;
-
-	/** Number of times prefix optimization avoided triggering cluster lookup */
-	ulint_ctr_n_t		n_sec_rec_cluster_reads_avoided;
-
 	/** Number of encryption_get_latest_key_version calls */
 	ulint_ctr_n_t		n_key_requests;
 
@@ -250,10 +220,6 @@ extern ulong	srv_purge_rseg_truncate_frequency;
 
 /** Enable or Disable Truncate of UNDO tablespace. */
 extern my_bool	srv_undo_log_truncate;
-
-/* Optimize prefix index queries to skip cluster index lookup when possible */
-/* Enables or disables this prefix optimization.  Disabled by default. */
-extern my_bool	srv_prefix_index_cluster_optimization;
 
 /** Default size of UNDO tablespace (10MiB for innodb_page_size=16k) */
 constexpr ulint SRV_UNDO_TABLESPACE_SIZE_IN_PAGES= (10U << 20) /
@@ -399,7 +365,6 @@ extern bool	srv_monitor_active;
 extern ulong	srv_n_spin_wait_rounds;
 extern uint	srv_spin_wait_delay;
 
-extern ulint	srv_truncated_status_writes;
 /** Number of initialized rollback segments for persistent undo log */
 extern ulong	srv_available_undo_logs;
 /** Iterations of the loop bounded by 'srv_active' label. */
@@ -701,15 +666,6 @@ struct export_var_t{
 						/ srv_n_lock_wait_count */
 	ulint innodb_row_lock_time_max;		/*!< srv_n_lock_max_wait_time
 						/ 1000 */
-	ulint innodb_rows_read;			/*!< srv_n_rows_read */
-	ulint innodb_rows_inserted;		/*!< srv_n_rows_inserted */
-	ulint innodb_rows_updated;		/*!< srv_n_rows_updated */
-	ulint innodb_rows_deleted;		/*!< srv_n_rows_deleted */
-	ulint innodb_system_rows_read; /*!< srv_n_system_rows_read */
-	ulint innodb_system_rows_inserted; /*!< srv_n_system_rows_inserted */
-	ulint innodb_system_rows_updated; /*!< srv_n_system_rows_updated */
-	ulint innodb_system_rows_deleted; /*!< srv_n_system_rows_deleted*/
-	ulint innodb_truncated_status_writes;	/*!< srv_truncated_status_writes */
 
 	/** Number of undo tablespace truncation operations */
 	ulong innodb_undo_truncations;
@@ -760,9 +716,6 @@ struct export_var_t{
 
 	/* Number of temporary tablespace pages decrypted */
 	ib_int64_t innodb_n_temp_blocks_decrypted;
-
-	ulint innodb_sec_rec_cluster_reads;	/*!< srv_sec_rec_cluster_reads */
-	ulint innodb_sec_rec_cluster_reads_avoided;/*!< srv_sec_rec_cluster_reads_avoided */
 
 	ulint innodb_encryption_rotation_pages_read_from_cache;
 	ulint innodb_encryption_rotation_pages_read_from_disk;

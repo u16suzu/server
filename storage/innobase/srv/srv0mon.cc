@@ -278,18 +278,6 @@ static monitor_info_t	innodb_counter_info[] =
 	 MONITOR_EXISTING | MONITOR_DEFAULT_ON),
 	 MONITOR_DEFAULT_START, MONITOR_OVLD_PAGES_READ},
 
-	{"buffer_index_sec_rec_cluster_reads", "buffer",
-	 "Number of secondary record reads triggered cluster read",
-	 static_cast<monitor_type_t>(
-	 MONITOR_EXISTING | MONITOR_DEFAULT_ON),
-	 MONITOR_DEFAULT_START, MONITOR_OVLD_INDEX_SEC_REC_CLUSTER_READS},
-
-	{"buffer_index_sec_rec_cluster_reads_avoided", "buffer",
-	 "Number of secondary record reads avoided triggering cluster read",
-	 static_cast<monitor_type_t>(
-	 MONITOR_EXISTING | MONITOR_DEFAULT_ON),
-	 MONITOR_DEFAULT_START, MONITOR_OVLD_INDEX_SEC_REC_CLUSTER_READS_AVOIDED},
-
 	{"buffer_data_reads", "buffer",
 	 "Amount of data read in bytes (innodb_data_reads)",
 	 static_cast<monitor_type_t>(
@@ -1078,50 +1066,6 @@ static monitor_info_t	innodb_counter_info[] =
 	 MONITOR_EXISTING | MONITOR_DEFAULT_ON | MONITOR_DISPLAY_CURRENT),
 	 MONITOR_DEFAULT_START, MONITOR_OVLD_SRV_PAGE_SIZE},
 
-	/* ========== Counters for DML operations ========== */
-	{"module_dml", "dml", "Statistics for DMLs",
-	 MONITOR_MODULE,
-	 MONITOR_DEFAULT_START, MONITOR_MODULE_DML_STATS},
-
-	{"dml_reads", "dml", "Number of rows read",
-	 static_cast<monitor_type_t>(MONITOR_EXISTING),
-	 MONITOR_DEFAULT_START, MONITOR_OLVD_ROW_READ},
-
-	{"dml_inserts", "dml", "Number of rows inserted",
-	 static_cast<monitor_type_t>(
-	 MONITOR_EXISTING | MONITOR_DEFAULT_ON),
-	 MONITOR_DEFAULT_START, MONITOR_OLVD_ROW_INSERTED},
-
-	{"dml_deletes", "dml", "Number of rows deleted",
-	 static_cast<monitor_type_t>(
-	 MONITOR_EXISTING | MONITOR_DEFAULT_ON),
-	 MONITOR_DEFAULT_START, MONITOR_OLVD_ROW_DELETED},
-
-	{"dml_updates", "dml", "Number of rows updated",
-	 static_cast<monitor_type_t>(
-	 MONITOR_EXISTING | MONITOR_DEFAULT_ON),
-	 MONITOR_DEFAULT_START, MONITOR_OLVD_ROW_UPDTATED},
-
-	{"dml_system_reads", "dml", "Number of system rows read",
-	 static_cast<monitor_type_t>(
-	 MONITOR_EXISTING | MONITOR_DEFAULT_ON),
-	 MONITOR_DEFAULT_START, MONITOR_OLVD_SYSTEM_ROW_READ},
-
-	{"dml_system_inserts", "dml", "Number of system rows inserted",
-	 static_cast<monitor_type_t>(
-	 MONITOR_EXISTING | MONITOR_DEFAULT_ON),
-	 MONITOR_DEFAULT_START, MONITOR_OLVD_SYSTEM_ROW_INSERTED},
-
-	{"dml_system_deletes", "dml", "Number of system rows deleted",
-	 static_cast<monitor_type_t>(
-	 MONITOR_EXISTING | MONITOR_DEFAULT_ON),
-	 MONITOR_DEFAULT_START, MONITOR_OLVD_SYSTEM_ROW_DELETED},
-
-	{"dml_system_updates", "dml", "Number of system rows updated",
-	 static_cast<monitor_type_t>(
-	 MONITOR_EXISTING | MONITOR_DEFAULT_ON),
-	 MONITOR_DEFAULT_START, MONITOR_OLVD_SYSTEM_ROW_UPDATED},
-
 	/* ========== Counters for DDL operations ========== */
 	{"module_ddl", "ddl", "Statistics for DDLs",
 	 MONITOR_MODULE,
@@ -1469,16 +1413,6 @@ srv_mon_process_existing_counter(
 		value = buf_pool.stat.n_pages_read;
 		break;
 
-	/* Number of times secondary index lookup triggered cluster lookup */
-	case MONITOR_OVLD_INDEX_SEC_REC_CLUSTER_READS:
-		value = srv_stats.n_sec_rec_cluster_reads;
-		break;
-	/* Number of times prefix optimization avoided triggering cluster
-	lookup */
-	case MONITOR_OVLD_INDEX_SEC_REC_CLUSTER_READS_AVOIDED:
-		value = srv_stats.n_sec_rec_cluster_reads_avoided;
-		break;
-
 	/* innodb_data_reads, the total number of data reads */
 	case MONITOR_OVLD_BYTE_READ:
 		value = srv_stats.data_read;
@@ -1545,46 +1479,6 @@ srv_mon_process_existing_counter(
 
 	case MONITOR_OVLD_BUFFER_POOL_SIZE:
 		value = srv_buf_pool_size;
-		break;
-
-	/* innodb_rows_read */
-	case MONITOR_OLVD_ROW_READ:
-		value = srv_stats.n_rows_read;
-		break;
-
-	/* innodb_rows_inserted */
-	case MONITOR_OLVD_ROW_INSERTED:
-		value = srv_stats.n_rows_inserted;
-		break;
-
-	/* innodb_rows_deleted */
-	case MONITOR_OLVD_ROW_DELETED:
-		value = srv_stats.n_rows_deleted;
-		break;
-
-	/* innodb_rows_updated */
-	case MONITOR_OLVD_ROW_UPDTATED:
-		value = srv_stats.n_rows_updated;
-		break;
-
-	/* innodb_system_rows_read */
-	case MONITOR_OLVD_SYSTEM_ROW_READ:
-		value = srv_stats.n_system_rows_read;
-		break;
-
-	/* innodb_system_rows_inserted */
-	case MONITOR_OLVD_SYSTEM_ROW_INSERTED:
-		value = srv_stats.n_system_rows_inserted;
-		break;
-
-	/* innodb_system_rows_deleted */
-	case MONITOR_OLVD_SYSTEM_ROW_DELETED:
-		value = srv_stats.n_system_rows_deleted;
-		break;
-
-	/* innodb_system_rows_updated */
-	case MONITOR_OLVD_SYSTEM_ROW_UPDATED:
-		value = srv_stats.n_system_rows_updated;
 		break;
 
 	/* innodb_row_lock_current_waits */

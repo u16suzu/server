@@ -202,8 +202,6 @@ static my_bool	innobase_create_status_file;
 my_bool	innobase_stats_on_metadata;
 static my_bool	innodb_optimize_fulltext_only;
 
-static char*	innodb_version_str = (char*) INNODB_VERSION_STR;
-
 extern uint srv_fil_crypt_rotate_key_age;
 extern uint srv_n_fil_crypt_iops;
 
@@ -900,6 +898,8 @@ static MYSQL_THDVAR_STR(tmpdir,
   "Directory for temporary non-tablespace files.",
   innodb_tmpdir_validate, NULL, NULL);
 
+static size_t truncated_status_writes;
+
 static SHOW_VAR innodb_status_variables[]= {
 #ifdef BTR_CUR_HASH_ADAPT
   {"adaptive_hash_hash_searches", &export_vars.innodb_ahi_hit, SHOW_SIZE_T},
@@ -1008,19 +1008,8 @@ static SHOW_VAR innodb_status_variables[]= {
   {"row_lock_time_avg", &export_vars.innodb_row_lock_time_avg, SHOW_SIZE_T},
   {"row_lock_time_max", &export_vars.innodb_row_lock_time_max, SHOW_SIZE_T},
   {"row_lock_waits", &export_vars.innodb_row_lock_waits, SHOW_SIZE_T},
-  {"rows_deleted", &export_vars.innodb_rows_deleted, SHOW_SIZE_T},
-  {"rows_inserted", &export_vars.innodb_rows_inserted, SHOW_SIZE_T},
-  {"rows_read", &export_vars.innodb_rows_read, SHOW_SIZE_T},
-  {"rows_updated", &export_vars.innodb_rows_updated, SHOW_SIZE_T},
-  {"system_rows_deleted", &export_vars.innodb_system_rows_deleted,SHOW_SIZE_T},
-  {"system_rows_inserted", &export_vars.innodb_system_rows_inserted,
-   SHOW_SIZE_T},
-  {"system_rows_read", &export_vars.innodb_system_rows_read, SHOW_SIZE_T},
-  {"system_rows_updated", &export_vars.innodb_system_rows_updated,
-   SHOW_SIZE_T},
   {"num_open_files", &fil_system.n_open, SHOW_SIZE_T},
-  {"truncated_status_writes", &export_vars.innodb_truncated_status_writes,
-   SHOW_SIZE_T},
+  {"truncated_status_writes", &truncated_status_writes, SHOW_SIZE_T},
   {"available_undo_logs", &srv_available_undo_logs, SHOW_ULONG},
   {"undo_truncations", &export_vars.innodb_undo_truncations, SHOW_ULONG},
 
@@ -1062,13 +1051,6 @@ static SHOW_VAR innodb_status_variables[]= {
    &export_vars.innodb_onlineddl_rowlog_pct_used, SHOW_SIZE_T},
   {"onlineddl_pct_progress",
    &export_vars.innodb_onlineddl_pct_progress, SHOW_SIZE_T},
-
-  /* Times secondary index lookup triggered cluster lookup and
-  times prefix optimization avoided triggering cluster lookup */
-  {"secondary_index_triggered_cluster_reads",
-   &export_vars.innodb_sec_rec_cluster_reads, SHOW_SIZE_T},
-  {"secondary_index_triggered_cluster_reads_avoided",
-   &export_vars.innodb_sec_rec_cluster_reads_avoided, SHOW_SIZE_T},
 
   /* Encryption */
   {"encryption_rotation_pages_read_from_cache",
@@ -8997,13 +8979,6 @@ ha_innobase::index_read(
 	case DB_SUCCESS:
 		error = 0;
 		table->status = 0;
-		if (m_prebuilt->table->is_system_db) {
-			srv_stats.n_system_rows_read.add(
-				thd_get_thread_id(m_prebuilt->trx->mysql_thd), 1);
-		} else {
-			srv_stats.n_rows_read.add(
-				thd_get_thread_id(m_prebuilt->trx->mysql_thd), 1);
-		}
 		break;
 
 	case DB_RECORD_NOT_FOUND:
@@ -9258,13 +9233,6 @@ ha_innobase::general_fetch(
 	case DB_SUCCESS:
 		error = 0;
 		table->status = 0;
-		if (m_prebuilt->table->is_system_db) {
-			srv_stats.n_system_rows_read.add(
-				thd_get_thread_id(trx->mysql_thd), 1);
-		} else {
-			srv_stats.n_rows_read.add(
-				thd_get_thread_id(trx->mysql_thd), 1);
-		}
 		break;
 	case DB_RECORD_NOT_FOUND:
 		error = HA_ERR_END_OF_FILE;
@@ -16233,7 +16201,7 @@ innodb_show_status(
 
 	if (flen > MAX_STATUS_SIZE) {
 		usable_len = MAX_STATUS_SIZE;
-		srv_truncated_status_writes++;
+		truncated_status_writes++;
 	} else {
 		usable_len = flen;
 	}
@@ -19403,11 +19371,13 @@ static MYSQL_SYSVAR_UINT(spin_wait_delay, srv_spin_wait_delay,
   "Maximum delay between polling for a spin lock (4 by default)",
   NULL, NULL, 4, 0, 6000, 0);
 
+static my_bool innodb_prefix_index_cluster_optimization;
+
 static MYSQL_SYSVAR_BOOL(prefix_index_cluster_optimization,
-  srv_prefix_index_cluster_optimization,
-  PLUGIN_VAR_OPCMDARG,
-  "Enable prefix optimization to sometimes avoid cluster index lookups.",
-  NULL, NULL, FALSE);
+  innodb_prefix_index_cluster_optimization,
+  PLUGIN_VAR_OPCMDARG | PLUGIN_VAR_DEPRECATED,
+  "Deprecated parameter with no effect",
+  nullptr, nullptr, TRUE);
 
 static MYSQL_SYSVAR_STR(data_file_path, innobase_data_file_path,
   PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -19461,10 +19431,6 @@ static MYSQL_SYSVAR_LONG(autoinc_lock_mode, innobase_autoinc_lock_mode,
   AUTOINC_NEW_STYLE_LOCKING,	/* Default setting */
   AUTOINC_OLD_STYLE_LOCKING,	/* Minimum value */
   AUTOINC_NO_LOCKING, 0);	/* Maximum value */
-
-static MYSQL_SYSVAR_STR(version, innodb_version_str,
-  PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
-  "InnoDB version", NULL, NULL, INNODB_VERSION_STR);
 
 #ifdef HAVE_URING
 # include <sys/utsname.h>
@@ -19856,7 +19822,6 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(prefix_index_cluster_optimization),
   MYSQL_SYSVAR(tmpdir),
   MYSQL_SYSVAR(autoinc_lock_mode),
-  MYSQL_SYSVAR(version),
   MYSQL_SYSVAR(use_native_aio),
 #ifdef HAVE_LIBNUMA
   MYSQL_SYSVAR(numa_interleave),
@@ -19936,10 +19901,10 @@ maria_declare_plugin(innobase)
   PLUGIN_LICENSE_GPL,
   innodb_init, /* Plugin Init */
   NULL, /* Plugin Deinit */
-  INNODB_VERSION_SHORT,
+  MYSQL_VERSION_MAJOR << 8 | MYSQL_VERSION_MINOR,
   innodb_status_variables_export,/* status variables             */
   innobase_system_variables, /* system variables */
-  INNODB_VERSION_STR,         /* string version */
+  PACKAGE_VERSION,
   MariaDB_PLUGIN_MATURITY_STABLE /* maturity */
 },
 i_s_innodb_trx,
