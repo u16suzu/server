@@ -5903,6 +5903,8 @@ class btr_est_cur_t
   page_id_t m_page_id;
   /* Current block */
   buf_block_t *m_block;
+  /* mtr savepoint of the current block */
+  ulint m_savepoint;
   /* Page search mode, can differ from m_mode for non-leaf pages, see c-tor
   comments for details */
   page_cur_mode_t m_page_mode;
@@ -5916,9 +5918,9 @@ class btr_est_cur_t
 
 public:
   btr_est_cur_t(dict_index_t *index, const dtuple_t &tuple,
-                     page_cur_mode_t mode)
+                page_cur_mode_t mode)
       : m_tuple(tuple), m_mode(mode),
-        m_page_id(index->table->space_id, index->page)
+        m_page_id(index->table->space_id, index->page), m_block(nullptr)
   {
 
     ut_ad(dict_index_check_search_tuple(index, &tuple));
@@ -5947,23 +5949,25 @@ public:
     }
   }
 
-  /** Get's block with m_page_id.
-  @param tree_block reference to the element in the array of already
-              visited blocks, the function adds gotten block to the array.
-  @param tree_savepoint reference to the element in the array of mtr
-              savepoints, each savepoint is set just before the block with
-              correspondent index in tree_blocks is latched, the function adds
-              new mtr savepoint to the array.
+  /** Get's block with m_page_id, releases the previously gotten block.
   @param  level tree level
   @param  mtr mtr
+  @param  left if the current cursor is left border or not
+  @param  other_block other(left or right) border block
   @return true on success or false otherwise. */
-  bool get_block(buf_block_t *&tree_block, ulint &tree_savepoint, ulint level,
-                 mtr_t &mtr)
+  bool get_block(ulint level, mtr_t &mtr, bool left,
+                 const buf_block_t *other_block)
   {
-    tree_savepoint= mtr_set_savepoint(&mtr);
+
+    buf_block_t *prev_block= m_block;
+    ulint prev_savepoint= m_savepoint;
+
+    m_savepoint= mtr_set_savepoint(&mtr);
     m_block= btr_block_get(*index(), m_page_id.page_no(), RW_S_LATCH, !level,
                            &mtr, nullptr);
-    tree_block= m_block;
+
+    if ((!left || prev_block != other_block) && prev_block)
+      mtr_release_block_at_savepoint(&mtr, prev_savepoint, prev_block);
 
     return m_block &&
            (level == ULINT_UNDEFINED ||
@@ -6085,7 +6089,10 @@ public:
   /** Copies block pointer from another btr_est_cur_t in the case if both path
   slots point to the same block.
   @param o reference to the other btr_est_cur_t object. */
-  void set_block(const btr_est_cur_t &o) { m_block= o.m_block; }
+  void set_block(const btr_est_cur_t &o) {
+    m_block= o.m_block;
+    m_savepoint= o.m_savepoint;
+  }
 
   /** @return current record number. */
   ulint nth_rec() const { return m_nth_rec; }
@@ -6269,10 +6276,6 @@ ha_rows btr_estimate_n_rows_in_range(dict_index_t *index,
   ulint height;
   ulint root_height= 0; /* remove warning */
 
-  buf_block_t *tree_blocks[BTR_MAX_LEVELS * 2];
-  ulint tree_savepoints[BTR_MAX_LEVELS * 2];
-  ulint n_blocks= 0;
-
   mem_heap_t *heap= NULL;
   rec_offs offsets_[REC_OFFS_NORMAL_SIZE];
   rec_offs *offsets= offsets_;
@@ -6289,8 +6292,6 @@ ha_rows btr_estimate_n_rows_in_range(dict_index_t *index,
 
   height= ULINT_UNDEFINED;
 
-  /* The number of latched blocks on each iteration */
-  ulint blocks_added= 1;
   /* This becomes true when the two paths do not pass through the same pages
   anymore. */
   bool diverged= false;
@@ -6308,11 +6309,8 @@ ha_rows btr_estimate_n_rows_in_range(dict_index_t *index,
 
   /* Loop and search until we arrive at the desired level. */
 search_loop:
-  ut_ad(n_blocks < BTR_MAX_LEVELS * 2);
-  if (!p1.get_block(tree_blocks[n_blocks], tree_savepoints[n_blocks], height,
-                    mtr))
+  if (!p1.get_block(height, mtr, true, p2.block()))
     goto error;
-  ++n_blocks;
 
   if (height == ULINT_UNDEFINED)
   {
@@ -6331,37 +6329,22 @@ search_loop:
     goto error;
 
   if (p1.page_id() == p2.page_id())
-  {
     p2.set_block(p1);
-    ut_ad(blocks_added == 1);
-  }
   else
   {
     ut_ad(diverged);
     if (diverged_lot)
       n_rows= btr_estimate_n_rows_in_range_on_level(
           height, p1, p2.page_id().page_no(), n_rows, is_n_rows_exact, mtr);
-    if (!p2.get_block(tree_blocks[n_blocks], tree_savepoints[n_blocks], height,
-                      mtr))
+    if (!p2.get_block(height, mtr, false, p1.block()))
       goto error;
-    ++n_blocks;
-    blocks_added= 2;
   }
 
   if (!p2.search_on_page(height, root_height, false))
     goto error;
 
-  if (height == 0) {
+  if (height == 0)
     mtr_release_s_latch_at_savepoint(&mtr, savepoint, &index->lock);
-
-    ut_ad(n_blocks >= blocks_added);
-    /* Don't unlatch p2 parent as p2 has not yet been latched, that is why
-    blocks_added is necessary */
-    for (ulint n_releases= 0; n_releases < n_blocks - blocks_added;
-         n_releases++)
-      mtr_release_block_at_savepoint(&mtr, tree_savepoints[n_releases],
-                                     tree_blocks[n_releases]);
-  }
 
   if (!diverged && (p1.nth_rec() != p2.nth_rec()))
   {
