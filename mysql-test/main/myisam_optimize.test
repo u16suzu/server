@@ -3,6 +3,10 @@
 #
 source include/have_debug_sync.inc;
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 call mtr.add_suppression(" marked as crashed and should be repaired");
 
 create table t1 (a int auto_increment primary key, b text);

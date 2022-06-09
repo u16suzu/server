@@ -1,6 +1,10 @@
 # This file is a collection of regression and coverage tests
 # for WL#4897: Add EXPLAIN INSERT/UPDATE/DELETE.
 
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+-- source include/no_view_protocol.inc
+
 -- disable_query_log
 -- disable_result_log
 # SET GLOBAL innodb_stats_persistent=0;

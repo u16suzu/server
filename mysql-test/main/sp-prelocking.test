@@ -19,7 +19,7 @@ drop function if exists f3;
 --enable_warnings
 
 # BUG#8072 
-
+--disable_view_protocol
 create database mysqltest;
 delimiter //;
 use mysqltest//
@@ -30,6 +30,7 @@ begin
 end;
 //
 delimiter ;//
+
 
 select database();
 call sp1();
@@ -42,6 +43,7 @@ select database();
 
 drop procedure mysqltest.sp1;
 drop database mysqltest;
+--enable_view_protocol
 
 # BUG#8766
 

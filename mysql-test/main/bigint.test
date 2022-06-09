@@ -1,6 +1,10 @@
 #
 # Initialize
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 --disable_warnings
 drop table if exists t1, t2;
 --enable_warnings

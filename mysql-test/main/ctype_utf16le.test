@@ -3,6 +3,10 @@
 -- source include/have_utf32.inc
 -- source include/have_utf8mb4.inc
 
+# Tests will be skipped for the view protocol because the view protocol uses 
+# an additional util connection and don't use for this nessesary "character_set_connection"
+-- source include/no_view_protocol.inc
+
 let $MYSQLD_DATADIR= `select @@datadir`;
 
 SET TIME_ZONE='+03:00';

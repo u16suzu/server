@@ -1,6 +1,11 @@
 #
 # simple test of group_concat function
 #
+
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+--source include/no_view_protocol.inc
+
 source include/have_sequence.inc;
 
 create table t1 (grp int, a bigint unsigned, c char(10) not null, d char(10) not null);

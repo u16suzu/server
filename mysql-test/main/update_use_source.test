@@ -1,3 +1,6 @@
+# Because view-protocol use separate util connection 
+-- source include/no_view_protocol.inc
+
 --source include/have_sequence.inc
 --source include/have_innodb.inc
 

@@ -2,6 +2,10 @@
 # Test of auto_increment at end of range
 #
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 set default_storage_engine=MYISAM;
 --source auto_increment_ranges.inc
 

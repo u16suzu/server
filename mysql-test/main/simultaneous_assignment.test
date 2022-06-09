@@ -29,6 +29,9 @@ UPDATE t1, t2
 --echo #
 --echo # Check standard update
 --echo #
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+--disable_view_protocol
 
 UPDATE t1
    SET c1 = c1+1,
@@ -43,6 +46,8 @@ UPDATE t1
        c3 = c2+1;
 SELECT * FROM t1;
 ROLLBACK;
+
+--enable_view_protocol
 
 --echo #
 --echo # Check update through a single view
@@ -67,6 +72,10 @@ DROP VIEW v1;
 --echo #
 --echo # Check update through a multi table view
 --echo #
+
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+--disable_view_protocol
 
 CREATE VIEW v1 (a, b) AS SELECT t1.c1, t2.c1  FROM t1, t2 WHERE t1.c1=t2.c1;
 --error ER_VIEW_MULTIUPDATE
@@ -119,6 +128,8 @@ ROLLBACK;
 
 DROP TABLE t1;
 DROP TABLE t2;
+
+--enable_view_protocol
 
 --echo #
 --echo # Check update fired by INSERT ... ON DUPLICATE KEY UPDATE

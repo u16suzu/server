@@ -12,6 +12,10 @@
 #               new wrapper t/concurrent_innodb_safelog.test
 #
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 --source include/have_innodb.inc
 
 let $engine_type= InnoDB;

@@ -144,6 +144,9 @@ drop table t1,t2 ;
 #
 # Test with locking
 #
+#The view protocol has to use the same connection,
+# not util connection
+--disable_view_protocol
 
 create table t1 (n int(10) not null primary key, d int(10));
 create table t2 (n int(10) not null primary key, d int(10));
@@ -164,6 +167,7 @@ select * from t1;
 select * from t2;
 unlock tables;
 drop table t1,t2;
+--enable_view_protocol
 
 #
 # Test safe updates and timestamps

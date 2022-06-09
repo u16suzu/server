@@ -52,6 +52,10 @@
 #                                                                              #
 ################################################################################
 
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+-- source include/no_view_protocol.inc
+
 # Set the SESSION DEFAULT STORAGE ENGINE to a value <> storage engine
 # to be tested. This must not affect any CREATE TABLE statement, where
 # the storage engine is assigned explicitly,

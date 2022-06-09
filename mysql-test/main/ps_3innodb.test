@@ -8,6 +8,10 @@
 # NOTE: PLEASE SEE ps_1general.test (bottom) 
 #       BEFORE ADDING NEW TEST CASES HERE !!!
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 # See Bug#38999 valgrind warnings for update statement in function
 # compare_record()
 -- source include/not_valgrind.inc

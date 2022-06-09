@@ -2,6 +2,10 @@
 # in the embedded server by default). So skip the test in embedded-server mode.
 -- source include/not_embedded.inc
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 #Don't run this test when thread_pool active
 --source include/not_threadpool.inc
 

@@ -1,6 +1,9 @@
 #
 # Test of ansi mode
 #
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+-- source include/no_view_protocol.inc
 
 --disable_warnings
 drop table if exists t1;

@@ -15,6 +15,10 @@
 #               main code went into include/query_cache.inc
 #
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 SET global query_cache_type=ON;
 SET local query_cache_type=ON;
 eval SET SESSION STORAGE_ENGINE = $engine_type;

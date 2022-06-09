@@ -1,3 +1,7 @@
+# Looks like it is necessary that the view protocol uses the same connection,
+# not util connection
+-- source include/no_view_protocol.inc
+
 -- source include/have_ucs2.inc
 -- source include/have_utf8mb4.inc
 

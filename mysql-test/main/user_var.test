@@ -1,6 +1,10 @@
 # Initialise
 source include/have_sequence.inc;
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 --error 1054
 set @a := foo;
 set @a := connection_id() + 3;

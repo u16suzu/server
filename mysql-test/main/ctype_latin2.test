@@ -1,4 +1,8 @@
 
+# Looks like it is necessary that the view protocol uses the same connection,
+# not util connection
+-- source include/no_view_protocol.inc
+
 # Tests with the latin1 character set
 #
 --disable_warnings

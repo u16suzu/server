@@ -1,6 +1,11 @@
 -- source include/have_utf32.inc
 -- source include/have_utf8mb4.inc
 
+# Tests will be skipped for the view protocol because the view protocol uses 
+# an additional util connection and don't use for this nessesary "character_set_connection"
+# Also need to resolve MDEV-27871
+-- source include/no_view_protocol.inc
+
 SET TIME_ZONE = '+03:00';
 
 --disable_warnings

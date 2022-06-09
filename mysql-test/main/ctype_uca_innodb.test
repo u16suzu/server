@@ -2,6 +2,10 @@
 # Tests for UCA collations with InnoDB
 #
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection, but the view protocol has to use the same connection
+-- source include/no_view_protocol.inc
+
 let collation=utf8_unicode_ci;
 --source include/have_collation.inc
 --source include/have_innodb.inc

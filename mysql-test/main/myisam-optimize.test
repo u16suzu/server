@@ -1,6 +1,10 @@
 --echo #
 --echo # MDEV-8475 stale .TMM file causes Aria engine to stop serving the table
 --echo #
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+-- source include/no_view_protocol.inc
+
 create table t1 (pk int primary key, i int) engine=MyISAM;
 insert into t1 values (1,1),(2,2);
 --let $datadir=`SELECT @@datadir`

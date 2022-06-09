@@ -22,6 +22,10 @@
 #      DELETE with LEFT JOIN crashes server with innodb_locks_unsafe_for_binlog
 #
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 --disable_warnings
 drop table if exists t1,t2,t3,t4,t5,t6,t7,t8,t9,t10;
 --enable_warnings

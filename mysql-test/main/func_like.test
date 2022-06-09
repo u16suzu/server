@@ -57,6 +57,9 @@ drop table t1;
 # Test like with non-default character set
 #
 
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+--disable_view_protocol
 SET NAMES koi8r;
 
 CREATE TABLE t1 (a VARCHAR(10) CHARACTER SET koi8r);
@@ -71,6 +74,7 @@ SELECT * FROM t1 WHERE a LIKE '%Æù×%';
 SELECT * FROM t1 WHERE a LIKE 'Æù×Á%';
 
 DROP TABLE t1;
+--enable_view_protocol
 
 # Bug #2547 Strange "like" behaviour in tables with default charset=cp1250
 # Test like with non-default character set using TurboBM
@@ -99,6 +103,9 @@ select _cp866'aaaaaaaaa' like _cp866'%aaaa%' collate cp866_bin;
 #
 # Check 8bit escape character
 #
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+--disable_view_protocol
 set names koi8r;
 select 'andre%' like 'andreÊ%' escape 'Ê';
 
@@ -112,6 +119,7 @@ select 'andre%' like 'andreÊ%' escape 'Ê';
 #
 select _cp1251'andre%' like convert('andreÊ%' using cp1251)  escape 'Ê';
 
+--enable_view_protocol
 
 --echo End of 4.1 tests
 

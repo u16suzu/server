@@ -1,6 +1,11 @@
 # Can't run with embedded server
 -- source include/not_embedded.inc
 
+
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 # Disable concurrent inserts to avoid test failures when reading
 # data from concurrent connections (insert might return before
 # the data is actually in the table).

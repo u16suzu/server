@@ -1,5 +1,9 @@
 source include/not_embedded.inc;
 source include/have_perfschema.inc;
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+-- source include/no_view_protocol.inc
+
 #
 # LOCK TABLES and privileges on views
 #

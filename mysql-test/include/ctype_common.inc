@@ -67,10 +67,14 @@ drop table t1;
 --echo #
 --echo # MDEV-6134 SUBSTRING_INDEX returns wrong result for 8bit character sets when delimiter is not found
 --echo #
+# Looks like it is necessary that the view protocol uses the same connection,
+# not util connection
+--disable_view_protocol
 SET character_set_client=latin1;
 SET character_set_connection= @test_character_set;
 SET collation_connection= @test_collation;
 SELECT COLLATION('.'), SUBSTRING_INDEX('.wwwmysqlcom', '.', -2) AS c1;
+--enable_view_protocol 
 
 #
 # Bug#27580 SPACE() function collation bug?

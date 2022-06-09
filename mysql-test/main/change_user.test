@@ -1,4 +1,9 @@
 # This test is checking that old password authentication works
+
+# Looks like it is necessary that the view protocol uses the same connection,
+# not util connection
+-- source include/no_view_protocol.inc
+
 set global secure_auth=0;
 #
 # functional change user tests

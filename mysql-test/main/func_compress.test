@@ -48,6 +48,9 @@ drop table t1;
 # note that when LOW_MEMORY is set the "test" below is meaningless
 #
 
+#view protocol generates additional warning
+--disable_view_protocol
+
 set @@global.max_allowed_packet=1048576*100;
 --replace_result "''" XXX "'1'" XXX
 
@@ -58,6 +61,8 @@ disconnect newconn;
 --source include/wait_until_disconnected.inc
 connection default;
 set @@global.max_allowed_packet=@save_max_allowed_packet;
+
+--enable_view_protocol
 
 #
 # Bug #18643: problem with null values

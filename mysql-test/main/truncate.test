@@ -69,6 +69,11 @@ drop table t1;
 --echo #
 --echo # Bug#20667 - Truncate table fails for a write locked table
 --echo #
+
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+--disable_view_protocol
+
 CREATE TABLE t1 (c1 INT);
 LOCK TABLE t1 WRITE;
 INSERT INTO t1 VALUES (1);
@@ -136,6 +141,8 @@ CREATE PROCEDURE p1() SET @a = 5;
 TRUNCATE p1;
 SHOW CREATE PROCEDURE p1;
 DROP PROCEDURE p1;
+
+--enable_view_protocol
 
 --echo #
 --echo # Bug#46452 Crash in MDL, HANDLER OPEN + TRUNCATE TABLE

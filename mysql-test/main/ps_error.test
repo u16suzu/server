@@ -1,6 +1,9 @@
 #
 # Tests related to PS returning errors rather than doing successfull execution
 #
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
 
 --echo #
 --echo # MDEV-17741 Assertion `thd->Item_change_list::is_empty()' failed in mysql_parse after unsuccessful PS

@@ -1,5 +1,9 @@
 --source include/not_embedded.inc
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 # Setup database, tables and user accounts
 --disable_warnings
 drop database if exists mysqltest_db1;

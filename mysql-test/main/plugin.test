@@ -256,10 +256,14 @@ select plugin_name from information_schema.plugins where plugin_library like 'ha
 #
 #
 #
+# Looks like it is necessary that the view protocol uses the same connection,
+# not util connection
+--disable_view_protocol
 set names utf8;
 select convert('admin𝌆' using utf8);
 --error ER_UDF_NO_PATHS
 install plugin foo soname 'admin𝌆';
+--enable_view_protocol
 
 --echo # End of 5.5 test
 

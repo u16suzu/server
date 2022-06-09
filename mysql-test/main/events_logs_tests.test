@@ -1,6 +1,10 @@
 # Can't test with embedded server that doesn't support grants
 -- source include/not_embedded.inc
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 set @save_long_query_time=@@long_query_time;
 --disable_warnings
 drop database if exists events_test;

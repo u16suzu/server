@@ -65,12 +65,15 @@ drop table t1;
 --echo
 --echo
 
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+--disable_view_protocol
 SET NAMES utf8;
 create database betäubungsmittelverschreibungsverordnung;
 use betäubungsmittelverschreibungsverordnung;
 select database() as "database" union all select database();
 drop database betäubungsmittelverschreibungsverordnung;
-
+--enable_view_protocol
 
 --echo #
 --echo # End of 10.2 tests

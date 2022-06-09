@@ -20,7 +20,13 @@ drop table com1;
 create table `clock$` (a int);
 drop table `clock$`;
 
+# Looks like it is necessary that the view protocol uses the same connection,
+# not util connection
+--disable_view_protocol
+
 select convert(convert(',' using filename) using binary);
+
+--enable_view_protocol 
 
 --echo #
 --echo # MDEV-7677 my_charset_handler_filename has a wrong "ismbchar" member

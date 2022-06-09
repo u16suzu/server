@@ -152,6 +152,10 @@ order by masks.p, example;
 
 DROP TABLE t1;
 
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+--disable_view_protocol
+
 SET @@SQL_MODE='NO_BACKSLASH_ESCAPES';
 show local variables like 'SQL_MODE';
 
@@ -203,6 +207,8 @@ SELECT "a\\b", "a\\\'b", "a""\\b", "a""\\\'b";
 SET @@SQL_MODE='';
 SELECT 'a\\b', 'a\\\"b', 'a''\\b', 'a''\\\"b';
 SELECT "a\\b", "a\\\'b", "a""\\b", "a""\\\'b";
+
+--enable_view_protocol
 
 #
 # Bug#6877: MySQL should give an error if the requested table type 

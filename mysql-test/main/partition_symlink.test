@@ -1,5 +1,10 @@
 # Test that must have symlink. eg. using DATA/INDEX DIR
 # (DATA/INDEX DIR requires symlinks)
+
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 # This test is only useful for MyISAM, since no other engine supports DATA DIR
 -- source include/have_partition.inc
 -- source include/have_symlink.inc

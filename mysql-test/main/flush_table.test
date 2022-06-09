@@ -4,6 +4,10 @@
 # Test of flush table
 #
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 # Should work in embedded server after mysqltest is fixed
 -- source include/not_embedded.inc
 --disable_warnings

@@ -1,5 +1,9 @@
 --source include/not_embedded.inc
 
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+-- source include/no_view_protocol.inc
+
 FLUSH STATUS;
 
 --disable_result_log

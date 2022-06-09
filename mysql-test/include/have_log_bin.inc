@@ -8,6 +8,8 @@
 
 source include/not_embedded.inc;
 
+-- source include/no_view_protocol.inc
+
 -- require include/have_log_bin.require
 disable_query_log;
 show variables like 'log_bin';

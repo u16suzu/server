@@ -2,6 +2,9 @@
 -- source include/not_embedded.inc
 --source include/default_charset.inc
 
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
 
 CREATE DATABASE IF NOT EXISTS events_test;
 use events_test;

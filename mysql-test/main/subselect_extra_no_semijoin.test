@@ -12,6 +12,10 @@ set @optimizer_switch_for_subselect_extra_test=null;
 --echo # MDEV-6439: Server crashes in Explain_union::print_explain with explain in slow log, tis620 charset
 --echo #
 
+# it is necessary that the view protocol uses the same connection,
+# not util connection
+--disable_view_protocol
+
 ## Using a separate client connection is easier than restoring state
 connect(con1,localhost,root,,);
 
@@ -36,3 +40,5 @@ drop table t1,t2;
 SET GLOBAL slow_query_log=@tmp;
 disconnect con1;
 connection default;
+
+--enable_view_protocol

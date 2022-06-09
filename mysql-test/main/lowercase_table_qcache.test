@@ -2,6 +2,11 @@
 #
 # Test of query cache with --lower-case-table-names
 #
+
+# Tests will be skipped for the view protocol because the view protocol creates 
+# an additional util connection and other statistics data
+-- source include/no_view_protocol.inc
+
 set @save_query_cache_size=@@query_cache_size;
 set GLOBAL query_cache_size=1355776;
 set GLOBAL query_cache_type=ON;

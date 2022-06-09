@@ -2,6 +2,10 @@
 --source include/not_embedded.inc
 --source include/have_innodb.inc
 
+#Temporary table is only available to the current session
+#and  the view cannot be created based on the temporary table
+--source include/no_view_protocol.inc
+
 #
 # Test of temporary tables
 #
