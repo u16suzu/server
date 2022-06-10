@@ -79,6 +79,13 @@ void dtuple_t::trim(const dict_index_t& index)
 	n_fields = i;
 }
 
+void dtuple_t::copy_field_type(dict_index_t *index)
+{
+  ut_ad(index->n_fields == n_fields);
+  for (ulint i= 0; i < n_fields; i++)
+    fields[i].type.assign(index->fields[i].col);
+}
+
 /** Compare two data tuples.
 @param[in] tuple1 first data tuple
 @param[in] tuple2 second data tuple

@@ -3943,7 +3943,9 @@ void UndorecApplier::log_insert(const dtuple_t &tuple,
       {
         dtuple_t *entry= row_build_index_entry_low(row, ext, index,
                                                    heap, ROW_BUILD_NORMAL);
-        success= row_log_online_op(index, entry, trx_id);
+        if (index->has_change_col())
+          entry->copy_field_type(index);
+	success= row_log_online_op(index, entry, trx_id);
       }
 
       index->lock.s_unlock();
@@ -4064,10 +4066,16 @@ void UndorecApplier::log_update(const dtuple_t &tuple,
         dtuple_t *old_entry= row_build_index_entry_low(
           old_row, old_ext, index, heap, ROW_BUILD_NORMAL);
 
-        success= row_log_online_op(index, old_entry, 0);
+	if (index->has_change_col())
+	  old_entry->copy_field_type(index);
+
+	success= row_log_online_op(index, old_entry, 0);
 
 	dtuple_t *new_entry= row_build_index_entry_low(
           row, new_ext, index, heap, ROW_BUILD_NORMAL);
+
+	if (index->has_change_col())
+	  new_entry->copy_field_type(index);
 
 	if (success)
 	  success= row_log_online_op(index, new_entry, trx_id);
@@ -4076,6 +4084,9 @@ void UndorecApplier::log_update(const dtuple_t &tuple,
       {
         dtuple_t *old_entry= row_build_index_entry_low(
           row, new_ext, index, heap, ROW_BUILD_NORMAL);
+
+	if (index->has_change_col())
+	  old_entry->copy_field_type(index);
 
         success= row_log_online_op(index, old_entry, 0);
       }

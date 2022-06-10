@@ -947,6 +947,36 @@ get_error_key_name(
 	}
 }
 
+/** Convert field type and length to InnoDB format */
+static void get_type(const Field& f, uint& prtype, uint8_t& mtype,
+                     uint16_t& len)
+{
+	mtype = get_innobase_type_from_mysql_type(&prtype, &f);
+	len = static_cast<uint16_t>(f.pack_length());
+	prtype |= f.type();
+	if (f.type() == MYSQL_TYPE_VARCHAR) {
+		auto l = static_cast<const Field_varstring&>(f).length_bytes;
+		len = static_cast<uint16_t>(len - l);
+		if (l == 2) prtype |= DATA_LONG_TRUE_VARCHAR;
+	}
+	if (!f.real_maybe_null()) prtype |= DATA_NOT_NULL;
+	if (f.binary()) prtype |= DATA_BINARY_TYPE;
+	if (f.table->versioned()) {
+		if (&f == f.table->field[f.table->s->vers.start_fieldno]) {
+			prtype |= DATA_VERS_START;
+		} else if (&f == f.table->field[f.table->s->vers.end_fieldno]) {
+			prtype |= DATA_VERS_END;
+		} else if (!(f.flags & VERS_UPDATE_UNVERSIONED_FLAG)) {
+			prtype |= DATA_VERSIONED;
+		}
+	}
+	if (!f.stored_in_db()) prtype |= DATA_VIRTUAL;
+
+	if (dtype_is_string_type(mtype)) {
+		prtype |= f.charset()->number << 16;
+	}
+}
+
 struct ha_innobase_inplace_ctx : public inplace_alter_handler_ctx
 {
 	/** Dummy query graph */
@@ -1040,6 +1070,9 @@ struct ha_innobase_inplace_ctx : public inplace_alter_handler_ctx
 
 	/** The page_compression_level attribute, or 0 */
 	const uint	page_compression_level;
+
+	/** Change of column collation */
+	std::map<unsigned, dict_col_t*> change_col_collate;
 
 	ha_innobase_inplace_ctx(row_prebuilt_t*& prebuilt_arg,
 				dict_index_t** drop_arg,
@@ -1322,6 +1355,80 @@ struct ha_innobase_inplace_ctx : public inplace_alter_handler_ctx
       my_error_innodb(error, old_table->name.m_name, old_table->flags);
     }
     return true;
+  }
+
+  /** Check whether the column has any change in collation type.
+  If it is then store the column information in heap
+  @param	index		index to be rebuilt
+  @param	new_table	altered table */
+  void change_col_collation(dict_index_t *index, const TABLE *new_table)
+  {
+    ulint n_cols= 0;
+    for (unsigned i= 0; i < index->n_fields; i++)
+    {
+      if (!dtype_is_string_type(index->fields[i].col->mtype))
+       continue;
+
+      auto *field_name= static_cast<const char*>(index->fields[i].name);
+
+      for (ulint j= 0; j < new_table->s->fields; j++)
+      {
+        Field *field= new_table->field[j];
+        if (strcmp(field_name, field->field_name.str))
+          continue;
+
+        unsigned prtype;
+        uint8_t mtype;
+        uint16_t len;
+        get_type(*field, prtype, mtype, len);
+
+        if (prtype == index->fields[i].col->prtype)
+	  continue;
+        auto it= change_col_collate.find(index->fields[i].col->ind);
+        if (it != change_col_collate.end())
+        {
+          n_cols++;
+          index->fields[i].col= it->second;
+          continue;
+        }
+
+        dict_col_t *col= static_cast<dict_col_t*>(mem_heap_alloc(
+                                                    heap, sizeof(dict_col_t)));
+
+        dict_col_t *field_col= index->fields[i].col;
+        col->assign(prtype, mtype, len, field->charset()->mbmaxlen,
+                    field->charset()->mbminlen, field_col->ind,
+		    field_col->ord_part, field_col->max_prefix,
+		    field_col->def_val);
+        index->fields[i].col= col;
+        n_cols++;
+        change_col_collate[col->ind]= col;
+      }
+    }
+
+    index->init_change_cols(n_cols);
+  }
+
+  void cleanup_col_collation()
+  {
+    ut_ad(old_table == new_table);
+    if (change_col_collate.empty())
+      return;
+    const dict_index_t *index= dict_table_get_first_index(old_table);
+    while ((index= dict_table_get_next_index(index)) != nullptr)
+    {
+      if (index->is_committed())
+        continue;
+      auto collate_end= change_col_collate.end();
+      for (ulint i= 0, j=0; i < index->n_fields; i++)
+      {
+        dict_col_t *col= index->fields[i].col;
+        if (change_col_collate.find(col->ind) != collate_end)
+	  continue;
+        index->fields[i].col= index->change_col_info->add_change_col(
+		index->heap, col, j++);
+      }
+    }
   }
 };
 
@@ -7041,6 +7148,9 @@ error_handling_drop_uncached:
 			if (n_v_col) {
 				index->assign_new_v_col(n_v_col);
 			}
+
+
+			ctx->change_col_collation(index, altered_table);
 			/* Note the id of the transaction that created this
 			index, we use it to restrict readers from accessing
 			this index, to ensure read consistency. */
@@ -8512,7 +8622,9 @@ ok_exit:
 		ctx->add_index, ctx->add_key_numbers, ctx->num_to_add_index,
 		altered_table, ctx->defaults, ctx->col_map,
 		ctx->add_autoinc, ctx->sequence, ctx->skip_pk_sort,
-		ctx->m_stage, add_v, eval_table, ctx->allow_not_null);
+		ctx->m_stage, add_v, eval_table, ctx->allow_not_null,
+		ctx->change_col_collate.empty()
+		? nullptr : &ctx->change_col_collate);
 
 #ifndef DBUG_OFF
 oom:
@@ -8846,6 +8958,7 @@ inline bool rollback_inplace_alter_table(Alter_inplace_info *ha_alter_info,
                                   Alter_info::ALTER_TABLE_LOCK_EXCLUSIVE,
                                   ctx->trx, prebuilt->trx);
       ctx->clean_new_vcol_index();
+      ctx->cleanup_col_collation();
       ut_d(dict_table_check_for_dup_indexes(ctx->old_table, CHECK_ABORTED_OK));
     }
 
@@ -9248,36 +9361,6 @@ processed_field:
 	}
 
 	return(false);
-}
-
-/** Convert field type and length to InnoDB format */
-static void get_type(const Field& f, uint& prtype, uint8_t& mtype,
-                     uint16_t& len)
-{
-	mtype = get_innobase_type_from_mysql_type(&prtype, &f);
-	len = static_cast<uint16_t>(f.pack_length());
-	prtype |= f.type();
-	if (f.type() == MYSQL_TYPE_VARCHAR) {
-		auto l = static_cast<const Field_varstring&>(f).length_bytes;
-		len = static_cast<uint16_t>(len - l);
-		if (l == 2) prtype |= DATA_LONG_TRUE_VARCHAR;
-	}
-	if (!f.real_maybe_null()) prtype |= DATA_NOT_NULL;
-	if (f.binary()) prtype |= DATA_BINARY_TYPE;
-	if (f.table->versioned()) {
-		if (&f == f.table->field[f.table->s->vers.start_fieldno]) {
-			prtype |= DATA_VERS_START;
-		} else if (&f == f.table->field[f.table->s->vers.end_fieldno]) {
-			prtype |= DATA_VERS_END;
-		} else if (!(f.flags & VERS_UPDATE_UNVERSIONED_FLAG)) {
-			prtype |= DATA_VERSIONED;
-		}
-	}
-	if (!f.stored_in_db()) prtype |= DATA_VIRTUAL;
-
-	if (dtype_is_string_type(mtype)) {
-		prtype |= f.charset()->number << 16;
-	}
 }
 
 /** Enlarge a column in the data dictionary tables.
@@ -10602,6 +10685,10 @@ commit_cache_norebuild(
 			    == ONLINE_INDEX_COMPLETE);
 		DBUG_ASSERT(!index->is_committed());
 		index->set_committed(true);
+
+		if (index->has_change_col()) {
+			index->change_col_info= nullptr;
+		}
 	}
 
 	for (ulint i = 0; i < ctx->num_to_drop_index; i++) {
@@ -11352,7 +11439,8 @@ foreign_fail:
 		    || ha_alter_info->alter_info->create_list.elements))
 	    || (ctx0->is_instant()
 		&& m_prebuilt->table->n_v_cols
-		&& ha_alter_info->handler_flags & ALTER_STORED_COLUMN_ORDER)) {
+		&& ha_alter_info->handler_flags & ALTER_STORED_COLUMN_ORDER)
+	    || ctx0->change_col_collate.size() > 0) {
 		DBUG_ASSERT(ctx0->old_table->get_ref_count() == 1);
 		ut_ad(ctx0->prebuilt == m_prebuilt);
 

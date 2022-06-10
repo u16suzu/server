@@ -216,6 +216,8 @@ row_merge_is_index_usable(
 	const dict_index_t*	index)	/*!< in: index to check */
 	MY_ATTRIBUTE((nonnull, warn_unused_result));
 
+typedef std::map<unsigned, dict_col_t*> col_collation_list;
+
 /** Build indexes on a table by reading a clustered index, creating a temporary
 file containing index entries, merge sorting these index entries and inserting
 sorted index entries to indexes.
@@ -263,7 +265,8 @@ row_merge_build_indexes(
 	ut_stage_alter_t*	stage,
 	const dict_add_v_col_t*	add_v,
 	struct TABLE*		eval_table,
-	bool			allow_non_null)
+	bool			allow_non_null,
+	col_collation_list*	col_collate= nullptr)
 	MY_ATTRIBUTE((warn_unused_result));
 
 /********************************************************************//**

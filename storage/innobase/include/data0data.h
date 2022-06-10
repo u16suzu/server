@@ -581,6 +581,10 @@ struct dtuple_t {
 	/** @return whether this is a hidden metadata record
 	for instant ADD COLUMN or ALTER TABLE */
 	bool is_metadata() const { return is_metadata(info_bits); }
+
+	/** Copy all the fields type from the index
+	@param index	index field to be copied */
+	void copy_field_type(dict_index_t* index);
 };
 
 inline ulint dtuple_get_n_fields(const dtuple_t* tuple)

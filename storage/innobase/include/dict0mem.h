@@ -723,6 +723,32 @@ public:
 
   /** @return whether the column values are comparable by memcmp() */
   bool is_binary() const { return prtype & DATA_BINARY_TYPE; }
+
+  /** Assign the column types */
+  void assign(unsigned col_prtype, uint8_t col_mtype, uint16_t col_len,
+              unsigned col_mbmaxlen, unsigned col_mbminlen,
+	      unsigned col_ind, unsigned col_ord_part,
+	      unsigned col_max_prefix, struct def_t col_def_val)
+  {
+    prtype= col_prtype;
+    mtype= col_mtype;
+    len= col_len;
+    mbmaxlen= col_mbmaxlen & 7;
+    mbminlen= col_mbminlen & 7;
+    ind= col_ind & 1023;
+    ord_part= col_ord_part & 1;
+    max_prefix= col_max_prefix & 4095;
+    def_val= col_def_val;
+  }
+
+  /** Duplicate the column types from the given column
+  @param  col	column to be duplicated */
+  void dup(dict_col_t *col)
+  {
+    assign(col->prtype, col->mtype, col->len, col->mbmaxlen,
+           col->mbminlen, col->ind, col->ord_part, col->max_prefix,
+	   col->def_val);
+  }
 };
 
 /** Index information put in a list of virtual column structure. Index
@@ -779,6 +805,7 @@ struct dict_v_col_t{
   }
 };
 
+
 /** Data structure for newly added virtual column in a index.
 It is used only during rollback_inplace_alter_table() of
 addition of index depending on newly added virtual columns
@@ -805,6 +832,30 @@ struct dict_add_v_col_info
     v_col[offset].m_col= col->m_col;
     v_col[offset].v_pos= col->v_pos;
     return &v_col[offset];
+  }
+};
+
+/** Data structure for change collation column in a index.
+It is used only during rollback_inplace_alter_table() of
+addition of index depending on newly added virtual columns
+and uses index heap. Should be freed when index is being
+removed from cache. */
+struct dict_change_col_info
+{
+  ulint n_cols;
+  dict_col_t* cols;
+
+  dict_col_t* add_change_col(mem_heap_t *heap, dict_col_t *col,
+                             ulint offset)
+  {
+    ut_ad(n_cols);
+    ut_ad(offset < n_cols);
+    if (!cols)
+      cols= static_cast<dict_col_t*>
+        (mem_heap_alloc(heap, n_cols * sizeof *col));
+    new (&cols[offset]) dict_col_t();
+    cols[offset].dup(col);
+    return &cols[offset];
   }
 };
 
@@ -1051,6 +1102,9 @@ struct dict_index_t {
 	It should use heap from dict_index_t. It should be freed
 	while removing the index from table. */
 	dict_add_v_col_info* new_vcol_info;
+
+	dict_change_col_info* change_col_info;
+
 	UT_LIST_NODE_T(dict_index_t)
 			indexes;/*!< list of indexes of the table */
 #ifdef BTR_CUR_ADAPT
@@ -1309,6 +1363,19 @@ public:
   /* @return number of newly added virtual column */
   ulint get_new_n_vcol() const
   { return new_vcol_info ? new_vcol_info->n_v_col : 0; }
+
+  /** Assign the number of collation change fields as a part
+  of the index
+  @param	n_cols	number of collation change cols */
+  void init_change_cols(ulint n_cols)
+  {
+    change_col_info= static_cast<dict_change_col_info*>(
+      mem_heap_zalloc(heap, sizeof *change_col_info));
+    change_col_info->n_cols= n_cols;
+  }
+
+  /** @return whether index has changed collation columns */
+  bool has_change_col() const { return change_col_info; }
 
   /** Reconstruct the clustered index fields.
   @return whether metadata is incorrect */

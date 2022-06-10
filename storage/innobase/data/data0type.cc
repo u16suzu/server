@@ -100,6 +100,15 @@ dtype_validate(
 	return(TRUE);
 }
 
+void dtype_t::assign(dict_col_t *col)
+{
+  prtype= col->prtype;
+  mtype= col->mtype;
+  len= col->len;
+  mbminlen= col->mbminlen;
+  mbmaxlen= col->mbmaxlen;
+}
+
 #ifdef UNIV_DEBUG
 /** Print a data type structure.
 @param[in]	type	data type */
