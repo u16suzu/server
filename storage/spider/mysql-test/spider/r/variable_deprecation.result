@@ -13,21 +13,6 @@ child3_3
 connection master_1;
 CREATE DATABASE auto_test_local;
 USE auto_test_local;
-# MDEV-27923 Deprecate spider_use_handler
-SET spider_use_handler = 3;
-Warnings:
-Warning	1287	'@@spider_use_handler' is deprecated and will be removed in a future release
-SHOW VARIABLES LIKE "spider_use_handler";
-Variable_name	Value
-spider_use_handler	3
-CREATE TABLE tbl_a (a INT) ENGINE=Spider COMMENT='uhd "3"';
-Warnings:
-Warning	1287	The table parameter 'uhd' is deprecated and will be removed in a future release
-CREATE TABLE tbl_b (a INT) ENGINE=Spider COMMENT='use_handler "3"';
-Warnings:
-Warning	1287	The table parameter 'use_handler' is deprecated and will be removed in a future release
-DROP TABLE tbl_a;
-DROP TABLE tbl_b;
 # MDEV-28297 Deprecate spider_internal_offset
 SET spider_internal_offset = 1;
 Warnings:
@@ -163,6 +148,21 @@ Warning	1287	The table parameter 'bfz' is deprecated and will be removed in a fu
 CREATE TABLE tbl_b (a INT) ENGINE=Spider COMMENT='buffer_size "1"';
 Warnings:
 Warning	1287	The table parameter 'buffer_size' is deprecated and will be removed in a future release
+DROP TABLE tbl_a;
+DROP TABLE tbl_b;
+# MDEV-27926 Deprecate spider_init_sql_alloc_size
+SET spider_init_sql_alloc_size = 1;
+Warnings:
+Warning	1287	'@@spider_init_sql_alloc_size' is deprecated and will be removed in a future release
+SHOW VARIABLES LIKE "spider_init_sql_alloc_size";
+Variable_name	Value
+spider_init_sql_alloc_size	1
+CREATE TABLE tbl_a (a INT) ENGINE=Spider COMMENT='isa "1"';
+Warnings:
+Warning	1287	The table parameter 'isa' is deprecated and will be removed in a future release
+CREATE TABLE tbl_b (a INT) ENGINE=Spider COMMENT='init_sql_alloc_size "1"';
+Warnings:
+Warning	1287	The table parameter 'init_sql_alloc_size' is deprecated and will be removed in a future release
 DROP TABLE tbl_a;
 DROP TABLE tbl_b;
 DROP DATABASE auto_test_local;

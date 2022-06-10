@@ -14,8 +14,8 @@
   along with this program; if not, write to the Free Software
   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
-#define SPIDER_DETAIL_VERSION "3.3.15"
-#define SPIDER_HEX_VERSION 0x0303
+#define SPIDER_DETAIL_VERSION PACKAGE_VERSION
+#define SPIDER_HEX_VERSION (MYSQL_VERSION_MAJOR << 8 | MYSQL_VERSION_MINOR)
 
 #define spider_my_free(A,B) my_free(A)
 #ifdef pthread_mutex_t
@@ -163,7 +163,7 @@ typedef start_new_trans *SPIDER_Open_tables_backup;
 
 #define SPIDER_TMP_SHARE_CHAR_PTR_COUNT     23
 #define SPIDER_TMP_SHARE_UINT_COUNT         SPIDER_TMP_SHARE_CHAR_PTR_COUNT
-#define SPIDER_TMP_SHARE_LONG_COUNT         20
+#define SPIDER_TMP_SHARE_LONG_COUNT         19
 #define SPIDER_TMP_SHARE_LONGLONG_COUNT      3
 
 #define SPIDER_MEM_CALC_LIST_NUM           314
@@ -900,7 +900,6 @@ typedef struct st_spider_share
   longlong           *monitoring_bg_interval;
   longlong           *monitoring_limit;
   longlong           *monitoring_sid;
-  long               *use_handlers;
   long               *connect_timeouts;
   long               *net_read_timeouts;
   long               *net_write_timeouts;
@@ -988,7 +987,6 @@ typedef struct st_spider_share
   uint               monitoring_bg_interval_length;
   uint               monitoring_limit_length;
   uint               monitoring_sid_length;
-  uint               use_handlers_length;
   uint               connect_timeouts_length;
   uint               net_read_timeouts_length;
   uint               net_write_timeouts_length;

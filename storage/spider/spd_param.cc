@@ -560,7 +560,7 @@ longlong spider_param_semi_split_read_limit(
  */
 static MYSQL_THDVAR_INT(
   init_sql_alloc_size, /* name */
-  PLUGIN_VAR_RQCMDARG, /* opt */
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_DEPRECATED, /* opt */
   "Initial sql string alloc size", /* comment */
   NULL, /* check */
   spider_use_table_value_deprecated, /* update */
@@ -2186,32 +2186,6 @@ int spider_param_bka_mode(
 
 /*
  -1 :use table parameter
-  0 :not use
-  1 :use handler
- */
-static MYSQL_THDVAR_INT(
-  use_handler, /* name */
-  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_DEPRECATED, /* opt */
-  "Use handler for reading", /* comment */
-  NULL, /* check */
-  spider_use_table_value_deprecated, /* update */
-  0, /* def */
-  -1, /* min */
-  3, /* max */
-  0 /* blk */
-);
-
-int spider_param_use_handler(
-  THD *thd,
-  int use_handler
-) {
-  DBUG_ENTER("spider_param_use_handler");
-  DBUG_RETURN(THDVAR(thd, use_handler) == -1 ?
-    use_handler : THDVAR(thd, use_handler));
-}
-
-/*
- -1 :use table parameter
   0 :return error if error
   1 :return 0 record if error
  */
@@ -2497,17 +2471,6 @@ uint spider_param_log_result_error_with_sql()
   DBUG_ENTER("spider_param_log_result_error_with_sql");
   DBUG_RETURN(spider_log_result_error_with_sql);
 }
-
-static char *spider_version = (char *) SPIDER_DETAIL_VERSION;
-static MYSQL_SYSVAR_STR(
-  version,
-  spider_version,
-  PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
-  "The version of Spider",
-  NULL,
-  NULL,
-  SPIDER_DETAIL_VERSION
-);
 
 /*
   0: server_id + thread_id
@@ -3017,7 +2980,6 @@ static struct st_mysql_sys_var* spider_system_variables[] = {
   MYSQL_SYSVAR(connect_mutex),
   MYSQL_SYSVAR(bka_engine),
   MYSQL_SYSVAR(bka_mode),
-  MYSQL_SYSVAR(use_handler),
   MYSQL_SYSVAR(error_read_mode),
   MYSQL_SYSVAR(error_write_mode),
   MYSQL_SYSVAR(skip_default_condition),
@@ -3030,7 +2992,6 @@ static struct st_mysql_sys_var* spider_system_variables[] = {
   MYSQL_SYSVAR(conn_wait_timeout),
   MYSQL_SYSVAR(log_result_errors),
   MYSQL_SYSVAR(log_result_error_with_sql),
-  MYSQL_SYSVAR(version),
   MYSQL_SYSVAR(internal_xa_id_type),
   MYSQL_SYSVAR(casual_read),
   MYSQL_SYSVAR(dry_access),
