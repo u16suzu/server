@@ -5872,7 +5872,7 @@ dberr_t btr_cur_node_ptr_delete(btr_cur_t* parent, mtr_t* mtr)
 	return err;
 }
 
-/* Represents the cursor for the number of rows estimation. The
+/** Represents the cursor for the number of rows estimation. The
 content is used for level-by-level diving and estimation the number of rows
 on each level. */
 class btr_est_cur_t
@@ -5882,34 +5882,34 @@ class btr_est_cur_t
   index of the record:    0, 1, 2, 3, 4, 5
   */
 
-  /* Index of the record where the page cursor stopped on this level
+  /** Index of the record where the page cursor stopped on this level
   (index in alphabetical order). In the above example, if the search stopped on
   record 'c', then nth_rec will be 3. */
   ulint m_nth_rec;
 
-  /* Number of the records on the page, not counting inf and sup.
+  /** Number of the records on the page, not counting inf and sup.
   In the above example n_recs will be 4. */
   ulint m_n_recs;
 
-  /* Search tuple */
+  /** Search tuple */
   const dtuple_t &m_tuple;
-  /* Cursor search mode */
+  /** Cursor search mode */
   page_cur_mode_t m_mode;
-  /* Page cursor which is used for search */
+  /** Page cursor which is used for search */
   page_cur_t m_page_cur;
-  /* Page id of the page to get on level down, can differ from m_block->page.id
-  at the moment when the child's page id is already found, but the child's
-  block has not fetched yet */
+  /** Page id of the page to get on level down, can differ from
+  m_block->page.id at the moment when the child's page id is already found, but
+  the child's block has not fetched yet */
   page_id_t m_page_id;
-  /* Current block */
+  /** Current block */
   buf_block_t *m_block;
-  /* mtr savepoint of the current block */
+  /** mtr savepoint of the current block */
   ulint m_savepoint;
-  /* Page search mode, can differ from m_mode for non-leaf pages, see c-tor
+  /** Page search mode, can differ from m_mode for non-leaf pages, see c-tor
   comments for details */
   page_cur_mode_t m_page_mode;
 
-  /* Matched fields and bytes which are used for on-page search, see
+  /** Matched fields and bytes which are used for on-page search, see
   btr_cur_t::(up|low)_(match|bytes) comments for details */
   ulint m_up_match= 0;
   ulint m_up_bytes= 0;
@@ -5949,8 +5949,9 @@ public:
     }
   }
 
-  /** Get's block with m_page_id, releases the previously gotten block.
-  @param  level tree level
+  /** Retrieve block with m_page_id, releases the previously gotten block.
+  @param  level distance from the leaf page level; ULINT_UNDEFINED when
+          fetching the root page
   @param  mtr mtr
   @param  left if the current cursor is left border or not
   @param  other_block other(left or right) border block
@@ -6009,8 +6010,7 @@ public:
     m_nth_rec= page_rec_get_n_recs_before(page_cur_get_rec(&m_page_cur));
     m_n_recs= page_get_n_recs(m_block->page.frame);
 
-    ut_ad(level == btr_page_get_level(page_cur_get_page(&m_page_cur)));
-    return true;
+    return level == btr_page_get_level(page_cur_get_page(&m_page_cur));
   }
 
   /** Gets page id of the current record child.
@@ -6035,12 +6035,8 @@ public:
       ut_ad(!page_rec_is_infimum(page_cur_get_rec(&m_page_cur)));
       return !page_rec_is_supremum(page_cur_get_rec(&m_page_cur));
     }
-    else
-    {
-      ut_ad(page_rec_is_infimum(page_cur_get_rec(&m_page_cur)));
-      return false;
-    }
-    return true;
+    ut_ad(page_rec_is_infimum(page_cur_get_rec(&m_page_cur)));
+    return false;
   }
 
   /** @return true if right border should be counted */
@@ -6061,7 +6057,7 @@ public:
               but if x < 2 is specified, then the cursor will be positioned at
               'inf' and we should not count the border */
               && !page_rec_is_infimum(rec));
-      /* Notice that for "WHERE col <= 'foo'" MySQL passes to
+      /* Notice that for "WHERE col <= 'foo'" the server passes to
       ha_innobase::records_in_range(): min_key=NULL (left-unbounded) which is
       expected max_key='foo' flag=HA_READ_AFTER_KEY (PAGE_CUR_G), which is
       unexpected - one would expect flag=HA_READ_KEY_OR_PREV (PAGE_CUR_LE). In
@@ -6086,8 +6082,8 @@ public:
   /** @return current page id */
   page_id_t page_id() const { return m_page_id; }
 
-  /** Copies block pointer from another btr_est_cur_t in the case if both path
-  slots point to the same block.
+  /** Copies block pointer and savepoint from another btr_est_cur_t in the case
+  if both left and right border cursors point to the same block.
   @param o reference to the other btr_est_cur_t object. */
   void set_block(const btr_est_cur_t &o) {
     m_block= o.m_block;
@@ -6153,7 +6149,6 @@ static ha_rows btr_estimate_n_rows_in_range_on_level(
   const fil_space_t *space= index->table->space;
   page_id_t page_id(space->id,
                     btr_page_get_next(buf_block_get_frame(left_cur.block())));
-  const ulint zip_size= space->zip_size();
 
   if (page_id.page_no() == FIL_NULL)
     goto inexact;
@@ -6161,40 +6156,22 @@ static ha_rows btr_estimate_n_rows_in_range_on_level(
   do
   {
     page_t *page;
-    dberr_t err= DB_SUCCESS;
     buf_block_t *prev_block= block;
     ulint prev_savepoint= savepoint;
 
     savepoint= mtr_set_savepoint(&mtr);
 
     /* Fetch the page. */
-    block= buf_page_get_gen(page_id, zip_size, RW_S_LATCH, NULL, BUF_GET, &mtr,
-                            &err, level == 0 && !index->is_clust());
+    block= btr_block_get(*index, page_id.page_no(), RW_S_LATCH, !level, &mtr,
+                         nullptr);
+
     if (prev_block)
       mtr_release_block_at_savepoint(&mtr, prev_savepoint, prev_block);
 
-    ut_ad((block != NULL) == (err == DB_SUCCESS));
-
-    if (!block)
-    {
-      if (err == DB_DECRYPTION_FAILED)
-      {
-        ib_push_warning((void *) NULL, DB_DECRYPTION_FAILED,
-                        "Table %s is encrypted but encryption service or"
-                        " used key_id is not available. "
-                        " Can't continue reading table.",
-                        index->table->name.m_name);
-        index->table->file_unreadable= true;
-      }
-
+    if (!block || btr_page_get_level(buf_block_get_frame(block)) != level)
       goto inexact;
-    }
 
     page= buf_block_get_frame(block);
-
-    ut_ad(fil_page_index_page_check(page));
-    ut_ad(btr_page_get_index_id(page) == index->id);
-    ut_ad(btr_page_get_level(page) == level);
 
     /* It is possible but highly unlikely that the page was originally written
     by an old version of InnoDB that did not initialize FIL_PAGE_TYPE on other
@@ -6208,11 +6185,10 @@ static ha_rows btr_estimate_n_rows_in_range_on_level(
 
     page_id.set_page_no(btr_page_get_next(page));
 
-    if (n_pages_read == n_pages_read_limit || page_id.page_no() == FIL_NULL)
+    if (n_pages_read == n_pages_read_limit)
     {
-      /* Either we read too many pages or we reached the end of the level
-      without passing through right_page_no, the tree must have changed
-      in the meantime */
+      /* We read too many pages or we reached the end of the level
+      without passing through right_page_no. */
       goto inexact;
     }
 
@@ -6247,13 +6223,15 @@ inexact:
   return (n_rows);
 }
 
-/** Estimates the number of rows in a given index range. Do search in the
-left page, then if there are pages between left and right ones, read a few
-pages to the right, if the right page is reached, fetch it and count the exact
-number of rows, otherwise count the estimated(see
-btr_estimate_n_rows_in_range_on_level() for details) number if rows, and
-fetch the right page. If leaves are reached, unlatch non-leaf pages except
-the right leaf parent. After the right leaf page is fetched, commit mtr.
+/** Estimates the number of rows in a given index range. Do search in the left
+page, then if there are pages between left and right ones, read a few pages to
+the right, if the right page is reached, count the exact number of rows without
+fetching the right page, the right page will be fetched in the caller of this
+function and the amount of its rows will be added. If the right page is not
+reached, count the estimated(see btr_estimate_n_rows_in_range_on_level() for
+details) rows number, and fetch the right page. If leaves are reached, unlatch
+non-leaf pages except the right leaf parent. After the right leaf page is
+fetched, commit mtr.
 @param[in]  index index
 @param[in]  range_start range start
 @param[in]  range_end   range end
@@ -6295,12 +6273,8 @@ ha_rows btr_estimate_n_rows_in_range(dict_index_t *index,
   /* This becomes true when the two paths do not pass through the same pages
   anymore. */
   bool diverged= false;
-  /* This becomes true when the paths are not the same or adjacent any more.
-  This means that they pass through the same or neighboring-on-the-same-level
-  pages only. */
-  bool diverged_lot= false;
   /* This is the height, i.e. the number of levels from the root, where paths
-  diverged a lot. */
+   are not the same or adjacent any more. */
   ulint divergence_height= ULINT_UNDEFINED;
   bool should_count_the_left_border= true;
   bool should_count_the_right_border= true;
@@ -6333,7 +6307,7 @@ search_loop:
   else
   {
     ut_ad(diverged);
-    if (diverged_lot)
+    if (divergence_height != ULINT_UNDEFINED)
       n_rows= btr_estimate_n_rows_in_range_on_level(
           height, p1, p2.page_id().page_no(), n_rows, is_n_rows_exact, mtr);
     if (!p2.get_block(height, mtr, false, p1.block()))
@@ -6361,7 +6335,6 @@ search_loop:
         /* There is at least one row between the two borders pointed to by p1
         and p2, so on the level below the slots will point to non-adjacent
         pages. */
-        diverged_lot= true;
         divergence_height= root_height - height;
       }
     }
@@ -6376,13 +6349,12 @@ search_loop:
       should_count_the_right_border= false;
     }
   }
-  else if (diverged && !diverged_lot)
+  else if (diverged && divergence_height == ULINT_UNDEFINED)
   {
 
     if (p1.nth_rec() < p1.n_recs() || p2.nth_rec() > 1)
     {
       ut_ad(p1.page_id() != p2.page_id());
-      diverged_lot= true;
       divergence_height= root_height - height;
 
       n_rows= 0;
@@ -6398,7 +6370,7 @@ search_loop:
       }
     }
   }
-  else if (diverged_lot)
+  else if (divergence_height != ULINT_UNDEFINED)
   {
     /* All records before the right page was already counted. Add records from
     p2->page_no which are to the left of the record which servers as a right
