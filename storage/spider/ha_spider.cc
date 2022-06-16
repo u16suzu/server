@@ -1184,9 +1184,6 @@ int ha_spider::external_lock(
   backup_error_status();
 
   DBUG_ENTER("ha_spider::external_lock");
-  DBUG_PRINT("info",("spider this=%p", this));
-  DBUG_PRINT("info",("spider lock_type=%x", lock_type));
-  DBUG_PRINT("info", ("spider sql_command=%d", thd_sql_command(thd)));
 
   if (wide_handler->stage == SPD_HND_STAGE_EXTERNAL_LOCK)
   {
@@ -1212,6 +1209,7 @@ int ha_spider::external_lock(
   {
     wide_handler->sql_command = SQLCOM_UNLOCK_TABLES;
   }
+
   if (lock_type == F_UNLCK &&
       wide_handler->sql_command != SQLCOM_UNLOCK_TABLES)
   {
@@ -1224,6 +1222,15 @@ int ha_spider::external_lock(
     DBUG_RETURN(error_num);
   }
   wide_handler->trx = trx;
+
+  /*
+    Do nothing if no remote table is locked and the command is UNLOCK TABLE.
+  */
+  if (!wide_handler->trx->locked_connections &&
+      wide_handler->sql_command == SQLCOM_UNLOCK_TABLES)
+  {
+    DBUG_RETURN(0);
+  }
 
   /* Question: Why the following if block is necessary? Why here? */
   if (store_error_num)
