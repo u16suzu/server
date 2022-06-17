@@ -1,6 +1,6 @@
 /*
    Copyright (c) 2001, 2013, Oracle and/or its affiliates.
-   Copyright (c) 2009, 2021, MariaDB Corporation.
+   Copyright (c) 2009, 2022, MariaDB Corporation.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -830,6 +830,25 @@ typedef long long	my_ptrdiff_t;
 #define ADD_TO_PTR(ptr,size,type) (type) ((uchar*) (ptr)+size)
 #define PTR_BYTE_DIFF(A,B) (my_ptrdiff_t) ((uchar*) (A) - (uchar*) (B))
 #define PREV_BITS(type,A)	((type) (((type) 1 << (A)) -1))
+
+inline void *aligned_malloc(size_t size, size_t alignment)
+{
+#ifdef _WIN32
+  return _aligned_malloc(size, alignment);
+#elif defined HAVE_ALIGNED_ALLOC
+  return aligned_alloc(alignment, size);
+#else
+  void *result;
+  if (posix_memalign(&result, alignment, size))
+    result= NULL;
+  return result;
+#endif
+}
+
+inline void aligned_free(void *ptr)
+{
+  IF_WIN(_aligned_free,free)(ptr);
+}
 
 /*
   Custom version of standard offsetof() macro which can be used to get
