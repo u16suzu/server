@@ -1526,12 +1526,14 @@ public:
 #endif
   }
 #ifndef _GNU_SOURCE
+#define close_pipe IF_WIN(closesocket, close)
   ~Thread_apc_context()
   {
     _THR_APC_CTX= NULL;
-    closesocket(self_pipe[0]);
-    closesocket(self_pipe[1]);
+    close_pipe(self_pipe[0]);
+    close_pipe(self_pipe[1]);
   }
+#undef close_pipe
 #endif
 };
 
