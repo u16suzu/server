@@ -1551,7 +1551,8 @@ my_socket threadlocal_get_self_pipe()
 
 static void self_pipe_write()
 {
-  DBUG_ASSERT(_THR_APC_CTX);
+  if (!_THR_APC_CTX)
+    return; // Spurious SIGUSR call at deinitialization stage
   char buf[4]{};
   send(_THR_APC_CTX->self_pipe[1], buf, sizeof buf, 0);
 }
